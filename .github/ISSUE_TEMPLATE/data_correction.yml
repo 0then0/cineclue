@@ -1,0 +1,25 @@
+name: Catalog or translation correction
+description: Report incorrect film metadata, missing images or a translation problem.
+title: "[Data]: "
+body:
+  - type: textarea
+    id: subject
+    attributes:
+      label: Film or interface text
+      description: Include the title and year, TMDB/Wikidata link or stable ID when available. For interface text, include the language and where it appears.
+    validations:
+      required: true
+  - type: textarea
+    id: correction
+    attributes:
+      label: Current value and correction
+      description: Explain what should change. Historical countries and people with similar names must remain distinct.
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Source or translation explanation
+      description: Link a reliable source for factual changes. For images, include the original source, license and attribution; do not upload copyrighted media without permission.
+    validations:
+      required: true

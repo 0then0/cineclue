@@ -1,19 +1,25 @@
+# Dependencies, builds and test output.
 node_modules/
 dist/
 coverage/
+*.tsbuildinfo
+
+# Local configuration and secrets. Keep the documented example versioned.
 .env
 .env.*
 !.env.example
-*.log
-.DS_Store
 
-data/*.local.json
-
-data/*.local.json.tmp
-
+# Runtime caches and temporary catalog exports. Public snapshots stay versioned.
 .cache/
+.netlify/
+/data/*.local.json
+/data/*.json.tmp
+*.log
 *.dump
 
-data/*.json.tmp
-
-.netlify/
+# Editor and operating-system files.
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~

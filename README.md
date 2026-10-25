@@ -15,6 +15,8 @@
 
 <p align="center"><strong>English</strong> · <a href="README.ru.md">Русский</a></p>
 
+<p align="center"><a href="https://cineclue-0then0.netlify.app/">Play CineClue</a> · <a href="https://github.com/0then0/CineClue/releases">Releases</a> · <a href="CHANGELOG.md">Changelog</a></p>
+
 Guess a mystery film through its connections to other movies. Each attempt compares the release year, director, genres, cast, runtime, countries and studios. Everyone gets the same Daily puzzle, with eight attempts to solve it.
 
 ![CineClue in English: film comparisons with posters, cast portraits, studio logos and match indicators](docs/screenshot.jpg)
@@ -28,7 +30,7 @@ Guess a mystery film through its connections to other movies. Each attempt compa
 - **10,000 films:** the catalog is included, so setup does not require a movie API key.
 - **Useful clues:** directional arrows, highlighted matches, portraits, posters and country flags.
 - **Hints:** unlock a clue after three misses and another after seven.
-- **English and Russian**, keyboard search, mobile layouts, and light, dark or system themes.
+- **Accessible controls:** keyboard search, mobile layouts, and light, dark or system themes.
 - **Spoiler-free sharing** through the system share menu or clipboard.
 
 ## Run with Docker
@@ -47,7 +49,8 @@ This Compose configuration is for local development. See [deployment](docs/DEPLO
 
 ## How to play
 
-Search for a film by its English, Russian, original or alternative title and select a result. The latest attempt appears first.
+Search for a film by an available translated, original or alternative title and select a result. The latest attempt appears first.
+
 - **Exact:** the number or complete set of entities matches.
 - **Partial:** some people, genres, countries or studios overlap. Matching entities are highlighted.
 - **Close:** within three years or ten minutes of the answer.
@@ -100,6 +103,7 @@ The repository includes a Netlify Functions API, a static Vite build and manual 
 - [Data and media](docs/DATA.md): catalog sources, licensing, imports and image caching.
 - [Deployment](docs/DEPLOYMENT.md): configuration, backups, catalog updates and PostgreSQL upgrades.
 - [Contributing](CONTRIBUTING.md), [security](SECURITY.md) and [code of conduct](CODE_OF_CONDUCT.md).
+- [Changelog](CHANGELOG.md): published releases and unreleased changes.
 
 ## License
 
