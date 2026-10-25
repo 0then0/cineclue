@@ -50,7 +50,6 @@ This Compose configuration is for local development. See [deployment](docs/DEPLO
 ## How to play
 
 Search for a film by an available translated, original or alternative title and select a result. The latest attempt appears first.
-
 - **Exact:** the number or complete set of entities matches.
 - **Partial:** some people, genres, countries or studios overlap. Matching entities are highlighted.
 - **Close:** within three years or ten minutes of the answer.
