@@ -319,12 +319,10 @@ export default function App() {
           ? `/challenges/${path.split("/")[2]}/guess`
           : `/unlimited/${game.id}/guess`;
     try {
-      const value = await api<GameView>(
-        endpoint,
-        { movieId: movie.id },
-        undefined,
-        game.mode === "daily" ? game.id : undefined,
-      );
+      const value = await api<GameView>(endpoint, {
+        movieId: movie.id,
+        ...(game.mode === "daily" ? { gameId: game.id } : {}),
+      });
       if (id === requestId.current) {
         setGame(value);
         if (value.status === "won" && game.status === "playing") setCelebration(value.id);

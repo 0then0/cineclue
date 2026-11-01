@@ -7,9 +7,9 @@ Session and search responses use `Cache-Control: no-store`. Media metadata uses 
 ## Daily
 
 - `GET /daily` creates or resumes the current UTC Daily session. A visitor cookie is issued when needed.
-- `POST /daily/guess` submits `{ "movieId": "Q25188" }` and requires `If-Match: "<session UUID>"`. It returns the updated session.
+- `POST /daily/guess` submits `{ "movieId": "Q25188", "gameId": "<session UUID>" }`. The session ID comes from `GET /daily`; missing or outdated identity is rejected with `409 daily_expired`. For older clients, a quoted `If-Match` session ID is still accepted when `gameId` is absent. When both are present, `gameId` takes precedence. It returns the updated session.
 
-The session ID prevents a tab from submitting yesterday's guess into today's puzzle. A stale header returns `409 daily_expired`.
+The session ID prevents a tab from submitting yesterday's guess into today's puzzle. A stale session ID returns `409 daily_expired`; a malformed JSON `gameId` returns `400 invalid_input`.
 
 ## Unlimited
 

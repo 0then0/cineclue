@@ -392,44 +392,62 @@ describe.skipIf(!enabled)("API + disposable PostgreSQL", () => {
     ).rows[0];
     expect(assigned).toEqual(stored);
   });
-  it("issues an HttpOnly cookie, resumes progress and gives every visitor the same daily target", async () => {
-    const fresh = await fetch(`${base}/daily`);
-    expect(fresh.headers.get("set-cookie")).toMatch(/HttpOnly; SameSite=Lax/);
-    const c1 = cookie(),
-      c2 = cookie();
-    const first = await request("/daily", c1);
-    const second = await request("/daily", c2);
-    expect(first.data).not.toHaveProperty("answer");
-    expect(JSON.stringify(first.data)).not.toContain("target");
-    expect(first.data.id).not.toBe(second.data.id);
-    const rows = (
-      await pool.query("SELECT DISTINCT target_id FROM game_session WHERE id=ANY($1::uuid[])", [
-        [first.data.id, second.data.id],
-      ])
-    ).rows;
-    expect(rows).toHaveLength(1);
-    const wrong = catalog.movies.find((m) => m.id !== rows[0].target_id);
-    if (!wrong) throw new Error("No wrong guess");
-    const guess = await request(
-      "/daily/guess",
-      c1,
-      { movieId: wrong.id },
-      { "If-Match": `"${first.data.id}"` },
-    );
-    expect(guess.r.status).toBe(200);
-    expect(guess.data).not.toHaveProperty("answer");
-    expect(guess.data.guesses).toHaveLength(1);
-    const resumed = await request("/daily", c1);
-    expect(resumed.data.guesses).toHaveLength(1);
-    expect(resumed.data.date).toBe(utcDate());
-    const stale = await request(
-      "/daily/guess",
-      c1,
-      { movieId: wrong.id },
-      { "If-Match": `"${randomUUID()}"` },
-    );
-    expect(stale.r.status).toBe(409);
-  });
+  it.each(["body", "header"] as const)(
+    "resumes Daily with session identity in %s and isolates visitors",
+    async (transport) => {
+      const fresh = await fetch(`${base}/daily`);
+      expect(fresh.headers.get("set-cookie")).toMatch(/HttpOnly; SameSite=Lax/);
+      const c1 = cookie(),
+        c2 = cookie();
+      const first = await request("/daily", c1);
+      const second = await request("/daily", c2);
+      expect(first.data).not.toHaveProperty("answer");
+      expect(JSON.stringify(first.data)).not.toContain("target");
+      expect(first.data.id).not.toBe(second.data.id);
+      const rows = (
+        await pool.query("SELECT DISTINCT target_id FROM game_session WHERE id=ANY($1::uuid[])", [
+          [first.data.id, second.data.id],
+        ])
+      ).rows;
+      expect(rows).toHaveLength(1);
+      const wrong = catalog.movies.find((m) => m.id !== rows[0].target_id);
+      if (!wrong) throw new Error("No wrong guess");
+      const guess = await request(
+        "/daily/guess",
+        c1,
+        { movieId: wrong.id, ...(transport === "body" ? { gameId: first.data.id } : {}) },
+        transport === "header" ? { "If-Match": `"${first.data.id}"` } : {},
+      );
+      expect(guess.r.status).toBe(200);
+      expect(guess.data).not.toHaveProperty("answer");
+      expect(guess.data.guesses).toHaveLength(1);
+      const resumed = await request("/daily", c1);
+      expect(resumed.data.guesses).toHaveLength(1);
+      expect(resumed.data.date).toBe(utcDate());
+      const stale = await request(
+        "/daily/guess",
+        c1,
+        { movieId: wrong.id },
+        { "If-Match": `"${randomUUID()}"` },
+      );
+      expect(stale.r.status).toBe(409);
+      for (const gameId of [randomUUID(), second.data.id]) {
+        const staleBody = await request(
+          "/daily/guess",
+          c1,
+          { movieId: wrong.id, gameId },
+          { "If-Match": `"${first.data.id}"` },
+        );
+        expect(staleBody.r.status).toBe(409);
+        expect(staleBody.data.error).toBe("daily_expired");
+      }
+      const missing = await request("/daily/guess", c1, { movieId: wrong.id });
+      expect(missing.r.status).toBe(409);
+      const malformed = await request("/daily/guess", c1, { movieId: wrong.id, gameId: "invalid" });
+      expect(malformed.r.status).toBe(400);
+      expect((await request("/daily", c1)).data.guesses).toHaveLength(1);
+    },
+  );
   it("creates opaque challenges, reveals only on victory and isolates different visitors", async () => {
     const target = catalog.movies[0];
     const creator = cookie(),

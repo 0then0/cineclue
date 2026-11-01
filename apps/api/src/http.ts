@@ -14,6 +14,7 @@ import { MediaCatalog } from "./media.ts";
 const uuid = z.uuid();
 const hintBody = z.object({ kind: z.enum(hintKinds) }).strict();
 const guessBody = z.object({ movieId: z.string().min(1).max(120) }).strict();
+const dailyGuessBody = guessBody.extend({ gameId: uuid.optional() });
 const unlimitedBody = z
   .object({
     difficulty: z.enum(["easy", "normal", "hard"]).default("normal"),
@@ -141,10 +142,15 @@ export function createHandler(
         return send(200, await games.daily(visitor));
       }
       if (method === "POST" && path === "/api/daily/guess") {
-        const b = guessBody.parse(await body(req));
+        const b = dailyGuessBody.parse(await body(req));
         const game = await games.daily(visitor);
-        if (req.headers.get("if-match") !== `"${game.id}"`)
-          throw new ApiError(409, "daily_expired");
+        // Prefer JSON identity: conditional headers may be consumed by hosting proxies.
+        // Retain If-Match for clients loaded before this deployment.
+        const matches =
+          b.gameId !== undefined
+            ? b.gameId === game.id
+            : req.headers.get("if-match") === `"${game.id}"`;
+        if (!matches) throw new ApiError(409, "daily_expired");
         return send(200, await games.guess(game.id, visitor, b.movieId));
       }
       const hintRoute = path.match(/^\/api\/games\/([^/]+)\/hints$/);

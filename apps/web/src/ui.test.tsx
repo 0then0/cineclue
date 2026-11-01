@@ -428,3 +428,33 @@ it("shows the selected film on challenge creation and clears it when choosing an
   expect(container.querySelector(".challenge-movie")).toBeNull();
   expect(screen.getByRole("combobox", { name: dictionaries.en.search })).toBeTruthy();
 });
+
+it("submits the Daily session ID in JSON without conditional headers", async () => {
+  const fetch = vi.fn(
+    async (url: string) =>
+      new Response(
+        JSON.stringify(
+          url.includes("/movies/search")
+            ? { movies: [publicMovie(movie)] }
+            : url.endsWith("/packs")
+              ? { packs: [], catalogSize: 1 }
+              : playing,
+        ),
+      ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+  const user = userEvent.setup();
+  await screen.findByText(dictionaries.en.emptyTitle);
+  await user.type(screen.getByRole("combobox", { name: dictionaries.en.search }), "inter");
+  await screen.findByRole("option", { name: /Interstellar/ });
+  await user.keyboard("{ArrowDown}{Enter}");
+  await waitFor(() =>
+    expect(fetch.mock.calls.some(([url]) => url.endsWith("/daily/guess"))).toBe(true),
+  );
+  const call = vi
+    .mocked(globalThis.fetch)
+    .mock.calls.find(([url]) => String(url).endsWith("/daily/guess"));
+  expect(JSON.parse(String(call?.[1]?.body))).toEqual({ movieId: movie.id, gameId: playing.id });
+  expect(new Headers(call?.[1]?.headers).has("if-match")).toBe(false);
+});

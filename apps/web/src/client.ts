@@ -5,19 +5,13 @@ export class HttpError extends Error {
     this.code = code;
   }
 }
-export async function api<T>(
-  path: string,
-  body?: unknown,
-  signal?: AbortSignal,
-  ifMatch?: string,
-): Promise<T> {
+export async function api<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const r = await fetch(`/api${path}`, {
     method: body === undefined ? "GET" : "POST",
     credentials: "same-origin",
     signal,
     headers: {
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-      ...(ifMatch ? { "If-Match": `"${ifMatch}"` } : {}),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });

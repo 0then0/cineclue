@@ -5,6 +5,12 @@ published versions; unreleased changes do not imply a production deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- Daily guesses send their session identity in JSON so hosting proxies cannot consume the
+  conditional header required to submit an answer. Stale games remain rejected; older clients
+  using `If-Match` are still supported.
+
 ### Changed
 
 - Standardized repository line endings, editor settings and ignored local files.
