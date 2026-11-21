@@ -871,6 +871,61 @@ footer {
   font-size: 11px;
   line-height: 1.6;
 }
+.history-transfer {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 16px;
+}
+.history-transfer .button-row {
+  justify-content: flex-start;
+  margin-top: 0;
+}
+.history-transfer p {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 10px 0 0;
+}
+.history-transfer [role="alert"] {
+  color: var(--danger);
+}
+.history-preview {
+  margin-top: 16px;
+}
+.history-preview .button-row {
+  margin-top: 16px;
+}
+.history-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 0;
+}
+.history-counts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.history-counts dd {
+  margin: 2px 0 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.history-conflicts {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 13px;
+}
+.history-conflicts li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.history-conflicts time {
+  flex-basis: 100%;
+  font-weight: 600;
+}
 .share-fallback {
   margin: 15px 5%;
   width: 90%;

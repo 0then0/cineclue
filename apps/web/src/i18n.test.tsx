@@ -91,6 +91,8 @@ it.each(languages)(
     fireEvent(screen.getByRole("dialog"), new Event("close"));
     fireEvent.click(screen.getByRole("button", { name: t.stats }));
     expect(screen.getByRole("heading", { name: t.distribution })).toBeTruthy();
+    expect(screen.getByRole("button", { name: t.exportHistory })).toBeTruthy();
+    expect(screen.getByRole("button", { name: t.importHistory })).toBeTruthy();
     fireEvent(screen.getByRole("dialog"), new Event("close"));
     const next = code === "ja" ? "es" : "ja";
     fireEvent.change(selector, { target: { value: next } });

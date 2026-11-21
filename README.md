@@ -60,6 +60,10 @@ After three and seven unsuccessful attempts, choose an available hint: genres, a
 
 Daily progress is stored on the server and linked to an anonymous browser cookie. Statistics are stored in that browser's localStorage. Clearing cookies removes access to existing games; clearing localStorage removes local statistics. No account is required.
 
+To move Daily statistics to another browser, open **Statistics** and choose **Export history**. In the other browser, choose **Import history**, review the new dates, matches and conflicts, then confirm. CineClue adds missing dates, keeps the local result for conflicting dates and recalculates streaks and the guess distribution from the combined history.
+
+The JSON file (`cineclue:daily-history`, version 1) contains each completed Daily's UTC date, outcome and attempt count. Future UTC dates are rejected on import. The browser processes files up to 6 MiB locally. Browsers with Web Locks serialize history writes across tabs. In browsers without Web Locks, simultaneous writes can race.
+
 ## Develop locally
 
 Use **Node.js 24.15+ within 24.x**, **pnpm 12.14.0** and **PostgreSQL 16–18**. PostgreSQL 18 is the default.

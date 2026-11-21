@@ -10,7 +10,6 @@ import { Clues } from "./Clues.tsx";
 import { Confetti } from "./Confetti.tsx";
 import { packName } from "./catalog-i18n.ts";
 import { api, HttpError, readStorage, writeStorage } from "./client.ts";
-import { useBackdropClose } from "./dialog.ts";
 import { FilmShelf } from "./FilmShelf.tsx";
 import { HelpDialog } from "./Help.tsx";
 import { Hints } from "./Hints.tsx";
@@ -24,9 +23,10 @@ import {
   titleOf,
 } from "./i18n.ts";
 import { MediaCredits, MediaPicture, useMovieMedia } from "./Media.tsx";
-import { readRecords, saveRecord } from "./records.ts";
-import { type DailyRecord, shareText, stats } from "./results.ts";
+import { readRecords, readStoredRecords, recordsKey, saveRecord } from "./records.ts";
+import { type DailyRecord, shareText } from "./results.ts";
 import { Search } from "./Search.tsx";
+import { StatsDialog } from "./StatsDialog.tsx";
 import { Tips } from "./Tips.tsx";
 import {
   readUnlimitedSession,
@@ -67,55 +67,6 @@ function ChallengeMovie({ movie, locale, t }: { movie: PublicMovie; locale: Loca
   );
 }
 
-function StatsDialog({
-  records,
-  t,
-  onClose,
-}: {
-  records: DailyRecord[];
-  t: Messages;
-  onClose: () => void;
-}) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const data = stats(records);
-  const backdropClose = useBackdropClose();
-  useEffect(() => {
-    ref.current?.showModal();
-  }, []);
-  return (
-    <dialog ref={ref} className="stats-dialog" onClose={onClose} {...backdropClose}>
-      <div className="dialog-heading">
-        <h2>{t.stats}</h2>
-        <button type="button" onClick={() => ref.current?.close()} aria-label={t.closeDialog}>
-          ×
-        </button>
-      </div>
-      <div className="stats-grid">
-        {(["played", "wins", "winRate", "streak", "best"] as const).map((k) => (
-          <div key={k}>
-            <strong>{data[k]}</strong>
-            <span>{t[k]}</span>
-          </div>
-        ))}
-      </div>
-      <h3>{t.distribution}</h3>
-      {data.played === 0 && <p>{t.noStats}</p>}
-      <div className="distribution">
-        {data.distribution.map((count, index) => (
-          <div key={`attempt-${index + 1}`}>
-            <span>{index + 1}</span>
-            <div
-              style={{ width: `${Math.max(4, (count / Math.max(1, ...data.distribution)) * 85)}%` }}
-            >
-              {count}
-            </div>
-          </div>
-        ))}
-      </div>
-      <small>{t.statsNote}</small>
-    </dialog>
-  );
-}
 export default function App() {
   const [locale, setLocale] = useState<Locale>(() => {
     const saved = readStorage<unknown>("cineclue:locale", null);
@@ -293,8 +244,8 @@ export default function App() {
     let active = true;
     void saveRecord(record).then((result) => {
       if (!active) return;
-      setRecords(result.records);
-      if (!result.saved) setNotice("localUnavailable");
+      if (result.saved) setRecords(result.records);
+      else setNotice("localUnavailable");
     });
     return () => {
       active = false;
@@ -302,7 +253,9 @@ export default function App() {
   }, [game]);
   useEffect(() => {
     const sync = (event: StorageEvent) => {
-      if (event.key === "cineclue:records" || event.key === null) setRecords(readRecords());
+      if (event.key !== recordsKey && event.key !== null) return;
+      const latest = readStoredRecords();
+      if (latest) setRecords(latest);
     };
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
@@ -788,7 +741,14 @@ export default function App() {
         </div>
       </footer>
       {showHelp && <HelpDialog t={t} onClose={() => setShowHelp(false)} />}
-      {showStats && <StatsDialog records={records} t={t} onClose={() => setShowStats(false)} />}
+      {showStats && (
+        <StatsDialog
+          records={records}
+          t={t}
+          onImport={setRecords}
+          onClose={() => setShowStats(false)}
+        />
+      )}
     </>
   );
 }

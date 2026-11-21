@@ -5,6 +5,10 @@ published versions; unreleased changes do not imply a production deployment.
 
 ## [Unreleased]
 
+### Added
+
+- Export completed Daily games from Statistics and import them in another browser with a conflict preview.
+
 ### Fixed
 
 - Daily guesses send their session identity in JSON so hosting proxies cannot consume the
