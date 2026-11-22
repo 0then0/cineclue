@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { PublicMovie } from "../../../packages/game-engine/src/model.ts";
-import { api } from "./client.ts";
+import { publicRead } from "./client.ts";
 import { type Locale, type Messages, titleOf } from "./i18n.ts";
 export function Search({
   locale,
@@ -35,9 +35,8 @@ export function Search({
     }
     setLoading(true);
     const timer = setTimeout(() => {
-      api<{ movies: PublicMovie[] }>(
+      publicRead<{ movies: PublicMovie[] }>(
         `/movies/search?q=${encodeURIComponent(query)}`,
-        undefined,
         controller.signal,
       )
         .then((b) => {

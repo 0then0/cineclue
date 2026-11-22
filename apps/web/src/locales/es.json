@@ -1,5 +1,10 @@
 {
   "daily": "Película del día",
+  "archive": "Archivo",
+  "archiveIntro": "Elige un acertijo de un día anterior. Los resultados del archivo no cuentan para las estadísticas de la película del día.",
+  "archiveEmpty": "Aún no hay acertijos guardados de días anteriores.",
+  "archiveMore": "Mostrar fechas anteriores",
+  "backToDaily": "Volver al acertijo de hoy",
   "unlimited": "Sin límites",
   "challenge": "Desafío",
   "stats": "Estadísticas",
@@ -155,6 +160,7 @@
   "error": "No se pudo conectar con el servidor. Inténtalo de nuevo.",
   "already_guessed": "Ya has probado esta película.",
   "daily_expired": "Hay una nueva película del día. Recarga la partida.",
+  "archive_unavailable": "No hay ningún acertijo en el archivo para esta fecha.",
   "rate_limited": "Demasiadas solicitudes. Inténtalo en un minuto.",
   "game_finished": "La partida ha terminado. Recarga para ver el resultado.",
   "not_found": "No se encontró esta partida para este navegador.",

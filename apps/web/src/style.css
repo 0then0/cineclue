@@ -342,6 +342,48 @@ h1 {
   color: var(--muted);
   white-space: nowrap;
 }
+.intro.archive-intro {
+  grid-template-columns: 1fr;
+}
+.archive-puzzles {
+  padding: 24px;
+}
+.archive-puzzles > p {
+  color: var(--muted);
+}
+.archive-dates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr));
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.archive-dates a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 14px;
+  text-decoration: none;
+}
+.archive-dates a:hover {
+  border-color: var(--ink);
+  background: var(--miss);
+}
+.archive-return {
+  padding: 12px 24px 0;
+  font-size: 13px;
+}
+.archive-return a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+}
 .attempt-track {
   display: flex;
   gap: 5px;
@@ -995,6 +1037,12 @@ footer {
   }
   .panel-heading {
     padding: 16px;
+  }
+  .archive-puzzles {
+    padding: 16px;
+  }
+  .archive-return {
+    padding-inline: 16px;
   }
   .panel-heading small {
     font-size: 10px;
@@ -2455,5 +2503,11 @@ footer .catalog-credit {
 @media (max-width: 360px) {
   .brand {
     font-size: 16px;
+  }
+  .mode-nav button {
+    padding-inline: 3px;
+  }
+  .mode-nav .live-dot {
+    display: none;
   }
 }

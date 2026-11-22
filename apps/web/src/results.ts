@@ -10,14 +10,9 @@ export const clueKeys = [
 ] as const;
 export function shareText(
   game: GameView,
-  labels = { daily: "Daily", challenge: "Challenge", unlimited: "Unlimited" },
+  labels = { daily: "Daily", archive: "Archive", challenge: "Challenge", unlimited: "Unlimited" },
 ) {
-  const label =
-    game.mode === "daily"
-      ? `${labels.daily} ${game.date}`
-      : game.mode === "challenge"
-        ? labels.challenge
-        : labels.unlimited;
+  const label = game.date ? `${labels[game.mode]} ${game.date}` : labels[game.mode];
   const grid = game.guesses
     .map((g) =>
       clueKeys

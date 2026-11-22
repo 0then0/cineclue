@@ -1,5 +1,10 @@
 {
   "daily": "Film des Tages",
+  "archive": "Archiv",
+  "archiveIntro": "Wähle ein Rätsel aus einem früheren Tag. Ergebnisse aus dem Archiv zählen nicht zur Statistik für den Film des Tages.",
+  "archiveEmpty": "Es sind noch keine Rätsel aus früheren Tagen gespeichert.",
+  "archiveMore": "Ältere Daten anzeigen",
+  "backToDaily": "Zurück zum heutigen Rätsel",
   "unlimited": "Unbegrenzt",
   "challenge": "Duell",
   "stats": "Statistik",
@@ -155,6 +160,7 @@
   "error": "Verbindung zum Server fehlgeschlagen. Versuche es erneut.",
   "already_guessed": "Diesen Film hast du bereits versucht.",
   "daily_expired": "Ein neuer Tagesfilm ist verfügbar. Lade das Spiel neu.",
+  "archive_unavailable": "Für dieses Datum gibt es kein Rätsel im Archiv.",
   "rate_limited": "Zu viele Anfragen. Versuche es in einer Minute erneut.",
   "game_finished": "Dieses Spiel ist beendet. Lade es neu, um das Ergebnis zu sehen.",
   "not_found": "Dieses Spiel wurde für diesen Browser nicht gefunden.",

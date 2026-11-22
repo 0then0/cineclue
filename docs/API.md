@@ -11,6 +11,15 @@ Session and search responses use `Cache-Control: no-store`. Media metadata uses 
 
 The session ID prevents a tab from submitting yesterday's guess into today's puzzle. A stale session ID returns `409 daily_expired`; a malformed JSON `gameId` returns `400 invalid_input`.
 
+## Archive
+
+- `GET /archive` lists saved puzzle dates strictly before the current UTC day, most recent first. It returns `{ "dates": ["2026-10-21"], "nextBefore": null }` with at most 30 dates per response. When `nextBefore` is a date, pass it as `?before=YYYY-MM-DD` to fetch dates strictly earlier than that cursor.
+- `POST /archive/{date}` accepts `{}` and returns the visitor's archive session. Opening the same date again restores that session, including completed results. The date must already have a saved Daily puzzle and be earlier than today in UTC.
+- `POST /archive/{date}/guess` submits `{ "movieId": "Q25188", "gameId": "<session UUID>" }` and returns the updated archive session.
+- `POST /archive/{date}/hints` submits `{ "kind": "decade", "gameId": "<session UUID>" }` and returns the updated archive session with the redeemed hint.
+
+Dates use the calendar format `YYYY-MM-DD`. Archive moves require a session owned by this visitor for the requested date and mode. A mismatched session returns `404 not_found`. Opening today, a future date or a date with no puzzle returns `404 archive_unavailable`. Archive sessions remain playable after 00:00 UTC. Daily and Archive keep separate progress even for the same puzzle.
+
 ## Unlimited
 
 - `POST /unlimited` creates a game with `{ "difficulty": "normal", "pack": "popular" }`. Both fields have defaults. Returns 201 and a session.
@@ -27,7 +36,7 @@ The link does not encode the film ID. Recipients have separate game progress.
 
 ## Hints
 
-`POST /games/{game_id}/hints` accepts a `kind` of `genres`, `actor`, `decade` or `filmography` and returns the updated session. One use unlocks after three misses and another after seven. A winning attempt is not a miss. Unused uses carry over within a game; each kind can be redeemed once.
+`POST /games/{game_id}/hints` redeems hints for Daily, Unlimited and Challenge. Archive uses the date-specific endpoint above. Both accept a `kind` of `genres`, `actor`, `decade` or `filmography` and return the updated session. One use unlocks after three misses and another after seven. A winning attempt is not a miss. Unused uses carry over within a game; each kind can be redeemed once.
 
 Closing a chooser does not spend a use. A kind with insufficient source data is unavailable. Filmography excludes the target itself. Redemption is serialized with guesses and other hint requests, and finished or expired games reject new hints.
 
@@ -57,7 +66,7 @@ The shared database-backed limit allows 60 mutations per remote IP per minute. A
 Errors use `{ "error": "code" }`:
 - **400:** `invalid_input`, `invalid_json`.
 - **403:** `invalid_origin`.
-- **404:** `not_found`.
+- **404:** `not_found`, `archive_unavailable`.
 - **405:** `method_not_allowed`.
 - **409:** `daily_expired`, `already_guessed`, `game_finished`, `hints_locked`, `hint_used`.
 - **413:** `body_too_large`.

@@ -1,5 +1,10 @@
 {
   "daily": "Film du jour",
+  "archive": "Archives",
+  "archiveIntro": "Choisissez une énigme d’un jour précédent. Les résultats des archives ne comptent pas dans les statistiques du film du jour.",
+  "archiveEmpty": "Aucune énigme des jours précédents n’a encore été enregistrée.",
+  "archiveMore": "Afficher les dates précédentes",
+  "backToDaily": "Revenir à l’énigme du jour",
   "unlimited": "Sans limites",
   "challenge": "Défi",
   "stats": "Statistiques",
@@ -155,6 +160,7 @@
   "error": "Impossible de joindre le serveur. Veuillez réessayer.",
   "already_guessed": "Vous avez déjà proposé ce film.",
   "daily_expired": "Un nouveau film du jour est disponible. Rechargez la partie.",
+  "archive_unavailable": "Il n’y a pas d’énigme dans les archives pour cette date.",
   "rate_limited": "Trop de requêtes. Réessayez dans une minute.",
   "game_finished": "Cette partie est terminée. Rechargez-la pour voir le résultat.",
   "not_found": "Cette partie est introuvable pour ce navigateur.",

@@ -448,6 +448,165 @@ describe.skipIf(!enabled)("API + disposable PostgreSQL", () => {
       expect((await request("/daily", c1)).data.guesses).toHaveLength(1);
     },
   );
+  it("keeps each archived date and visitor independent through UTC midnight", async () => {
+    const older = "2000-06-17";
+    const yesterday = "2000-06-20";
+    const today = "2000-06-21";
+    const tomorrow = "2000-06-22";
+    const [target, dailyTarget, ...misses] = catalog.movies.slice(0, 5);
+    const snapshot = { ...target, runtime: target.runtime + 1 };
+    const visitor = cookie();
+    const otherVisitor = cookie();
+    const archived = `/archive/${yesterday}`;
+    const open = () => request(archived, visitor, {});
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      await pool.query(
+        "INSERT INTO daily_puzzle(puzzle_date,target_id,target_snapshot) VALUES($1,$2,NULL),($3,$4,$5),($6,$2,NULL),($7,$2,NULL)",
+        [older, dailyTarget.id, yesterday, target.id, JSON.stringify(snapshot), today, tomorrow],
+      );
+      vi.setSystemTime(new Date(`${yesterday}T23:59:59.999Z`));
+      const originalDaily = (await request("/daily", visitor)).data;
+      const originalWin = await request("/daily/guess", visitor, {
+        gameId: originalDaily.id,
+        movieId: target.id,
+      });
+      expect(originalWin.data.status).toBe("won");
+
+      vi.setSystemTime(new Date(`${today}T23:59:59.999Z`));
+      const daily = (await request("/daily", visitor)).data;
+      const dailyProgress = await request("/daily/guess", visitor, {
+        gameId: daily.id,
+        movieId: misses[0].id,
+      });
+      expect(dailyProgress.data.guesses).toHaveLength(1);
+      const listing = await request("/archive", visitor);
+      expect(listing.r.headers.get("cache-control")).toBe("no-store");
+      expect(listing.data).toEqual({ dates: [yesterday, older], nextBefore: null });
+      for (const unavailable of [today, tomorrow, "2000-06-19"]) {
+        const result = await request(`/archive/${unavailable}`, visitor, {});
+        expect(result.r.status).toBe(404);
+        expect(result.data).toEqual({ error: "archive_unavailable" });
+      }
+      for (const invalid of ["2000-02-30", "0000-01-01", "2000-6-20"]) {
+        expect((await request(`/archive/${invalid}`, visitor, {})).r.status).toBe(400);
+      }
+
+      const opened = await Promise.all(Array.from({ length: 6 }, open));
+      const game = opened[0].data;
+      for (const result of opened) {
+        expect(result.r.status).toBe(200);
+        expect(result.data).toEqual(game);
+      }
+      expect(game).toMatchObject({
+        mode: "archive",
+        date: yesterday,
+        status: "playing",
+        guesses: [],
+      });
+      expect(game.id).not.toBe(originalDaily.id);
+      expect(game).not.toHaveProperty("answer");
+      expect(game).not.toHaveProperty("nextPuzzleAt");
+      expect(JSON.stringify(game)).not.toContain(target.id);
+      const anotherDate = (await request(`/archive/${older}`, visitor, {})).data;
+      const anotherGame = (await request(archived, otherVisitor, {})).data;
+      expect(new Set([game.id, anotherDate.id, anotherGame.id]).size).toBe(3);
+
+      for (const gameId of [originalDaily.id, daily.id, anotherDate.id, anotherGame.id]) {
+        const move = await request(`${archived}/guess`, visitor, { gameId, movieId: target.id });
+        const hint = await request(`${archived}/hints`, visitor, { gameId, kind: "decade" });
+        expect(move.r.status).toBe(404);
+        expect(hint.r.status).toBe(404);
+      }
+      expect((await request(`/games/${game.id}/hints`, visitor, { kind: "decade" })).r.status).toBe(
+        404,
+      );
+      expect(
+        (await request("/daily/guess", visitor, { gameId: game.id, movieId: target.id })).data,
+      ).toEqual({ error: "daily_expired" });
+      expect((await request("/daily", visitor)).data).toEqual(dailyProgress.data);
+
+      for (const miss of misses) {
+        const move = await request(`${archived}/guess`, visitor, {
+          gameId: game.id,
+          movieId: miss.id,
+        });
+        expect(move.r.status).toBe(200);
+        expect(move.data).not.toHaveProperty("answer");
+      }
+      expect((await open()).data.guesses).toHaveLength(3);
+
+      vi.setSystemTime(new Date(`${tomorrow}T00:00:00.000Z`));
+      const hint = await request(`${archived}/hints`, visitor, { gameId: game.id, kind: "decade" });
+      expect(hint.r.status).toBe(200);
+      expect(hint.data.hints.used).toHaveLength(1);
+      expect(hint.data).not.toHaveProperty("answer");
+      expect((await open()).data).toEqual(hint.data);
+      const win = await request(`${archived}/guess`, visitor, {
+        gameId: game.id,
+        movieId: target.id,
+      });
+      expect(win.r.status).toBe(200);
+      expect(win.data).toMatchObject({
+        status: "won",
+        answer: { id: target.id, runtime: snapshot.runtime },
+      });
+      expect((await open()).data).toEqual(win.data);
+      expect((await request(archived, otherVisitor, {})).data).toEqual(anotherGame);
+      expect((await request(`/archive/${older}`, visitor, {})).data).toEqual(anotherDate);
+      const stale = await request("/daily/guess", visitor, {
+        gameId: daily.id,
+        movieId: target.id,
+      });
+      expect(stale.r.status).toBe(409);
+      expect(stale.data.error).toBe("daily_expired");
+      expect((await request(`/games/${daily.id}/hints`, visitor, { kind: "decade" })).data).toEqual(
+        {
+          error: "daily_expired",
+        },
+      );
+      expect((await request("/daily", visitor)).data).toMatchObject({
+        date: tomorrow,
+        guesses: [],
+      });
+      expect((await request(`/archive/${today}`, visitor, {})).data).toMatchObject({
+        date: today,
+        guesses: [],
+      });
+      const { rows } = await pool.query(
+        "SELECT count(*)::int AS count FROM game_session WHERE mode='archive' AND visitor_id=$1",
+        [visitor.split("=")[1]],
+      );
+      expect(rows[0].count).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("returns only saved archive dates in bounded pages with an exclusive cursor", async () => {
+    const date = "1999-03-01";
+    const visitor = cookie();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date(`${date}T00:00:00Z`));
+      expect((await request("/archive", visitor)).data).toEqual({ dates: [], nextBefore: null });
+      await pool.query(
+        "INSERT INTO daily_puzzle(puzzle_date,target_id) SELECT $1::date - days, $2 FROM generate_series(1,32) AS days",
+        [date, catalog.movies[0].id],
+      );
+      const first = (await request("/archive?before=2099-01-01", visitor)).data;
+      expect(first.dates).toHaveLength(30);
+      expect(first.dates[0]).toBe("1999-02-28");
+      expect(first.nextBefore).toBe("1999-01-30");
+      expect(first.dates).toEqual([...first.dates].sort().reverse());
+      expect((await request(`/archive?before=${first.nextBefore}`, visitor)).data).toEqual({
+        dates: ["1999-01-29", "1999-01-28"],
+        nextBefore: null,
+      });
+      expect((await request("/archive?before=1999-02-29", visitor)).r.status).toBe(400);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("creates opaque challenges, reveals only on victory and isolates different visitors", async () => {
     const target = catalog.movies[0];
     const creator = cookie(),
@@ -735,13 +894,20 @@ describe.skipIf(!enabled)("API + disposable PostgreSQL", () => {
     const a = limited.address();
     if (!a || typeof a === "string") throw new Error("No port");
     try {
-      const r = await fetch(`http://127.0.0.1:${a.port}/api/unlimited`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      expect(r.status).toBe(429);
-      expect(r.headers.get("retry-after")).toBe("60");
+      for (const route of [
+        "/unlimited",
+        "/archive/2000-06-20",
+        "/archive/2000-06-20/guess",
+        "/archive/2000-06-20/hints",
+      ]) {
+        const r = await fetch(`http://127.0.0.1:${a.port}/api${route}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        expect(r.status).toBe(429);
+        expect(r.headers.get("retry-after")).toBe("60");
+      }
     } finally {
       await new Promise<void>((resolve) => limited.close(() => resolve()));
     }

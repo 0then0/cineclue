@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -120,18 +120,18 @@ it.each(["won", "lost"] as const)("shows %s and the answer after completion", as
 });
 it("shows a recoverable API error and loading state", async () => {
   let reject: (e: Error) => void = () => {};
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockImplementation((url: string) =>
-      url.endsWith("/packs")
-        ? Promise.resolve(new Response(JSON.stringify({ packs: [], catalogSize: 0 })))
-        : new Promise((_, r) => {
-            reject = r;
-          }),
-    ),
-  );
+  const fetch = vi.fn(async (url: string) => {
+    if (url === "/api/daily") {
+      return new Promise<Response>((_, r) => {
+        reject = r;
+      });
+    }
+    return Response.json(url.endsWith("/packs") ? { packs: [], catalogSize: 0 } : { movies: [] });
+  });
+  vi.stubGlobal("fetch", fetch);
   render(<App />);
   expect(screen.getByText(dictionaries.en.loading)).toBeTruthy();
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === "/api/daily")).toBe(true));
   reject(new Error("offline"));
   await screen.findByRole("alert");
   expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
@@ -457,4 +457,117 @@ it("submits the Daily session ID in JSON without conditional headers", async () 
     .mock.calls.find(([url]) => String(url).endsWith("/daily/guess"));
   expect(JSON.parse(String(call?.[1]?.body))).toEqual({ movieId: movie.id, gameId: playing.id });
   expect(new Headers(call?.[1]?.headers).has("if-match")).toBe(false);
+});
+
+it("opens dated archive pages and ignores an archive guess that returns after switching to Daily", async () => {
+  const date = "2099-10-20";
+  const archive = {
+    ...playing,
+    id: "archive-game",
+    mode: "archive",
+    date,
+    nextPuzzleAt: undefined,
+  };
+  const history = JSON.stringify([{ date: "2099-10-19", won: true, attempts: 2 }]);
+  localStorage.setItem("cineclue:records", history);
+  const guess = Promise.withResolvers<Response>();
+  const fetch = vi.fn(async (url: string, _options?: RequestInit) => {
+    if (url === `/api/archive/${date}/guess`) return guess.promise;
+    const responses: Record<string, unknown> = {
+      "/api/packs": { packs: [], catalogSize: 1 },
+      "/api/daily": playing,
+      "/api/archive": { dates: [date], nextBefore: date },
+      [`/api/archive?before=${date}`]: { dates: ["2099-10-17"], nextBefore: null },
+      [`/api/archive/${date}`]: archive,
+    };
+    return Response.json(responses[url] ?? { movies: [publicMovie(movie)] });
+  });
+  vi.stubGlobal("fetch", fetch);
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole("combobox", { name: dictionaries.en.search });
+  await user.click(screen.getByRole("button", { name: "Archive" }));
+  await user.click(await screen.findByRole("button", { name: dictionaries.en.archiveMore }));
+  await screen.findByRole("link", { name: "17 October 2099" });
+  await user.click(screen.getByRole("link", { name: "20 October 2099" }));
+  expect(window.location.pathname).toBe(`/archive/${date}`);
+  const search = await screen.findByRole("combobox", { name: dictionaries.en.search });
+  await user.type(search, "inter");
+  await user.click(await screen.findByRole("option", { name: /Interstellar/ }));
+  const request = fetch.mock.calls.find(([url]) => url === `/api/archive/${date}/guess`);
+  expect(JSON.parse(String(request?.[1]?.body))).toEqual({ gameId: archive.id, movieId: movie.id });
+
+  await user.click(screen.getByRole("link", { name: dictionaries.en.backToDaily }));
+  await screen.findByText(dictionaries.en.today);
+  await act(async () => {
+    guess.resolve(
+      Response.json({
+        ...archive,
+        status: "won",
+        guesses: [{ movie: publicMovie(movie), comparison: compareMovies(movie, movie) }],
+        answer: movie,
+      }),
+    );
+  });
+  expect(window.location.pathname).toBe("/");
+  expect(screen.getByText(dictionaries.en.emptyTitle)).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: dictionaries.en.won })).toBeNull();
+  expect(localStorage.getItem("cineclue:records")).toBe(history);
+});
+
+it("loads Daily before a pending initial archive session returns", async () => {
+  const date = "2099-10-20";
+  const archive = Promise.withResolvers<Response>();
+  window.history.replaceState({}, "", `/archive/${date}`);
+  const fetch = vi.fn(async (url: string) => {
+    if (url === `/api/archive/${date}`) return archive.promise;
+    if (url === "/api/daily") return Response.json(playing);
+    return Response.json(url === "/api/packs" ? { packs: [], catalogSize: 1 } : { movies: [] });
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+  await waitFor(() =>
+    expect(fetch).toHaveBeenCalledWith(`/api/archive/${date}`, expect.anything()),
+  );
+  fireEvent.click(screen.getByRole("link", { name: dictionaries.en.backToDaily }));
+  await screen.findByRole("combobox", { name: dictionaries.en.search });
+  await act(async () => {
+    archive.resolve(Response.json({ ...playing, mode: "archive", date, id: "archive-game" }));
+  });
+  expect(screen.getByText(dictionaries.en.today)).toBeTruthy();
+});
+
+it("saves a late Daily result while the archive is open", async () => {
+  const guess = Promise.withResolvers<Response>();
+  const fetch = vi.fn(async (url: string) => {
+    if (url === "/api/daily/guess") return guess.promise;
+    if (url === "/api/daily") return Response.json(playing);
+    if (url === "/api/archive") return Response.json({ dates: [], nextBefore: null });
+    return Response.json(
+      url === "/api/packs" ? { packs: [], catalogSize: 1 } : { movies: [publicMovie(movie)] },
+    );
+  });
+  vi.stubGlobal("fetch", fetch);
+  const user = userEvent.setup();
+  render(<App />);
+  await user.type(await screen.findByRole("combobox", { name: dictionaries.en.search }), "inter");
+  await user.click(await screen.findByRole("option", { name: /Interstellar/ }));
+  expect(fetch).toHaveBeenCalledWith("/api/daily/guess", expect.anything());
+  await user.click(screen.getByRole("button", { name: dictionaries.en.archive }));
+  await screen.findByText(dictionaries.en.archiveEmpty);
+  await act(async () => {
+    guess.resolve(
+      Response.json({
+        ...playing,
+        status: "won",
+        guesses: [{ movie: publicMovie(movie), comparison: compareMovies(movie, movie) }],
+        answer: movie,
+      }),
+    );
+  });
+  expect(screen.getByText(dictionaries.en.archiveEmpty)).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: dictionaries.en.won })).toBeNull();
+  expect(JSON.parse(localStorage.getItem("cineclue:records") ?? "[]")).toEqual([
+    { date: playing.date, won: true, attempts: 1 },
+  ]);
 });

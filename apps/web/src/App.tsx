@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type MouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import type {
+  ArchivePage,
   Difficulty,
   GameView,
   HintKind,
@@ -9,7 +10,14 @@ import { Answer } from "./Answer.tsx";
 import { Clues } from "./Clues.tsx";
 import { Confetti } from "./Confetti.tsx";
 import { packName } from "./catalog-i18n.ts";
-import { api, HttpError, readStorage, writeStorage } from "./client.ts";
+import {
+  api,
+  establishVisitor,
+  HttpError,
+  publicRead,
+  readStorage,
+  writeStorage,
+} from "./client.ts";
 import { FilmShelf } from "./FilmShelf.tsx";
 import { HelpDialog } from "./Help.tsx";
 import { Hints } from "./Hints.tsx";
@@ -42,6 +50,7 @@ type Pack = {
   category?: "all" | "genre" | "era" | "director" | "country";
   rules?: { yearMin?: number; yearMax?: number };
 };
+type CatalogInfo = { packs: Pack[]; catalogSize: number; dataSources?: string[] };
 type Theme = "system" | "light" | "dark";
 const route = () => window.location.pathname;
 function errorMessage(e: unknown, t: Messages) {
@@ -80,7 +89,9 @@ export default function App() {
   });
   const [celebration, setCelebration] = useState<string | null>(null);
   const [path, setPath] = useState(route);
+  const activePath = useRef(path);
   const [game, setGame] = useState<GameView | null>(null);
+  const [archivePage, setArchivePage] = useState<ArchivePage | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState("");
@@ -88,6 +99,8 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const builder = path === "/challenge";
+  const archiveList = path === "/archive" || path === "/archive/";
+  const isArchive = archiveList || path.startsWith("/archive/");
   const [createdChallenge, setCreatedChallenge] = useState<{
     url: string;
     movie: PublicMovie;
@@ -102,108 +115,174 @@ export default function App() {
   const [fallbackShare, setFallbackShare] = useState("");
   const t = dictionaries[locale];
   const requestId = useRef(0);
+  const visitor = useRef<Promise<void> | null>(null);
+  const ensureVisitor = useCallback(() => {
+    visitor.current ??= establishVisitor().catch((error) => {
+      visitor.current = null;
+      throw error;
+    });
+    return visitor.current;
+  }, []);
+  const persistDailyResult = useCallback((value: GameView, id: number) => {
+    if (value.mode !== "daily" || value.status === "playing" || !value.date) return;
+    const record = {
+      date: value.date,
+      won: value.status === "won",
+      attempts: value.guesses.length,
+    };
+    void saveRecord(record).then((result) => {
+      if (result.saved) setRecords(result.records);
+      else if (id === requestId.current) setNotice("localUnavailable");
+    });
+  }, []);
   const unlimitedSession = useRef<UnlimitedSession | null>(readUnlimitedSession());
   const startingUnlimited = useRef<Promise<GameView> | null>(null);
-  const startUnlimited = useCallback((difficulty: Difficulty, pack: string) => {
-    // StrictMode and repeated loads must share a single session-creation request.
-    if (!startingUnlimited.current) {
-      startingUnlimited.current = api<GameView>("/unlimited", { difficulty, pack })
-        .then((value) => {
-          const saved = { id: value.id, pack };
-          unlimitedSession.current = saved;
-          saveUnlimitedSession(saved);
-          return value;
-        })
-        .finally(() => {
-          startingUnlimited.current = null;
-        });
-    }
-    return startingUnlimited.current;
-  }, []);
+  const startUnlimited = useCallback(
+    (difficulty: Difficulty, pack: string) => {
+      // StrictMode and repeated loads must share a single session-creation request.
+      if (!startingUnlimited.current) {
+        startingUnlimited.current = ensureVisitor()
+          .then(() => api<GameView>("/unlimited", { difficulty, pack }))
+          .then((value) => {
+            const saved = { id: value.id, pack };
+            unlimitedSession.current = saved;
+            saveUnlimitedSession(saved);
+            return value;
+          })
+          .finally(() => {
+            startingUnlimited.current = null;
+          });
+      }
+      return startingUnlimited.current;
+    },
+    [ensureVisitor],
+  );
   useEffect(() => {
     document.documentElement.lang = locale;
-    document.title = `CineClue · ${dictionaries[locale].headline}`;
     writeStorage("cineclue:locale", locale);
   }, [locale]);
+  useEffect(() => {
+    document.title = `CineClue · ${isArchive ? t.archive : t.headline}`;
+  }, [isArchive, t]);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     writeStorage("cineclue:theme", theme);
   }, [theme]);
-  useEffect(() => {
-    const listener = () => {
-      setPath(route());
-      setCreatedChallenge(null);
-    };
-    window.addEventListener("popstate", listener);
-    return () => window.removeEventListener("popstate", listener);
-  }, []);
-  const navigate = useCallback((url: string) => {
-    window.history.pushState({}, "", url);
+  const changePath = useCallback((url: string) => {
+    if (url === activePath.current) return;
+    activePath.current = url;
+    requestId.current++;
     setPath(url);
+    setGame(null);
+    setArchivePage(null);
+    setPending(true);
+    setError(null);
     setCreatedChallenge(null);
     setNotice("");
     setFallbackShare("");
+    setCelebration(null);
   }, []);
-  const load = useCallback(async () => {
-    const id = ++requestId.current;
-    setPending(true);
-    setError(null);
-    setGame(null);
-    if (path === "/challenge") {
-      setPending(false);
-      return;
-    }
-    try {
-      const legacyUnlimited = path.startsWith("/unlimited/");
-      let value: GameView;
-      if (path === "/unlimited") {
-        const active = unlimitedSession.current;
-        if (active) {
-          try {
-            value = await api<GameView>(`/unlimited/${encodeURIComponent(active.id)}`);
-          } catch (e) {
-            if (!(e instanceof HttpError) || e.code !== "not_found") throw e;
-            const replacement = unlimitedSession.current;
-            if (replacement && replacement.id !== active.id) {
-              value = await api<GameView>(`/unlimited/${encodeURIComponent(replacement.id)}`);
-            } else {
-              unlimitedSession.current = null;
-              saveUnlimitedSession(null);
-              value = await startUnlimited("normal", active.pack);
+  useEffect(() => {
+    const listener = () => changePath(route());
+    window.addEventListener("popstate", listener);
+    return () => window.removeEventListener("popstate", listener);
+  }, [changePath]);
+  const navigate = useCallback(
+    (url: string) => {
+      if (url === activePath.current) return;
+      if (url.startsWith("/archive") || activePath.current.startsWith("/archive")) {
+        document.documentElement.scrollTop = 0;
+      }
+      window.history.pushState({}, "", url);
+      changePath(url);
+    },
+    [changePath],
+  );
+  function followRoute(event: MouseEvent<HTMLAnchorElement>) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    event.preventDefault();
+    navigate(event.currentTarget.pathname);
+  }
+  const load = useCallback(
+    async (before?: string) => {
+      const id = ++requestId.current;
+      setPending(true);
+      setError(null);
+      setGame(null);
+      if (path === "/challenge") {
+        setPending(false);
+        return;
+      }
+      try {
+        await ensureVisitor();
+        if (id !== requestId.current) return;
+        if (archiveList) {
+          const page = await api<ArchivePage>(before ? `/archive?before=${before}` : "/archive");
+          if (id === requestId.current) {
+            setArchivePage((current) => ({
+              ...page,
+              dates: before && current ? [...current.dates, ...page.dates] : page.dates,
+            }));
+          }
+          return;
+        }
+        const legacyUnlimited = path.startsWith("/unlimited/");
+        let value: GameView;
+        if (isArchive) {
+          value = await api<GameView>(path, {});
+        } else if (path === "/unlimited") {
+          const active = unlimitedSession.current;
+          if (active) {
+            try {
+              value = await api<GameView>(`/unlimited/${encodeURIComponent(active.id)}`);
+            } catch (e) {
+              if (id !== requestId.current) return;
+              if (!(e instanceof HttpError) || e.code !== "not_found") throw e;
+              const replacement = unlimitedSession.current;
+              if (replacement && replacement.id !== active.id) {
+                value = await api<GameView>(`/unlimited/${encodeURIComponent(replacement.id)}`);
+              } else {
+                unlimitedSession.current = null;
+                saveUnlimitedSession(null);
+                value = await startUnlimited("normal", active.pack);
+              }
             }
+          } else {
+            value = await startUnlimited("normal", "popular");
           }
         } else {
-          value = await startUnlimited("normal", "popular");
+          const endpoint = path.startsWith("/challenge/")
+            ? `/challenges/${path.split("/")[2]}`
+            : legacyUnlimited
+              ? path
+              : "/daily";
+          value = await api<GameView>(endpoint);
         }
-      } else {
-        const endpoint = path.startsWith("/challenge/")
-          ? `/challenges/${path.split("/")[2]}`
-          : legacyUnlimited
-            ? path
-            : "/daily";
-        value = await api<GameView>(endpoint);
-      }
-      if (id === requestId.current) {
-        if (value.mode === "unlimited") {
-          const active = unlimitedSession.current;
-          const saved = { id: value.id, pack: active?.id === value.id ? active.pack : "popular" };
-          unlimitedSession.current = saved;
-          saveUnlimitedSession(saved);
-          setDifficulty(value.difficulty);
-          setPack(saved.pack);
-          if (legacyUnlimited) {
-            window.history.replaceState({}, "", "/unlimited");
-            setPath("/unlimited");
+        persistDailyResult(value, id);
+        if (id === requestId.current) {
+          if (value.mode === "unlimited") {
+            const active = unlimitedSession.current;
+            const saved = { id: value.id, pack: active?.id === value.id ? active.pack : "popular" };
+            unlimitedSession.current = saved;
+            saveUnlimitedSession(saved);
+            setDifficulty(value.difficulty);
+            setPack(saved.pack);
+            if (legacyUnlimited) {
+              window.history.replaceState({}, "", "/unlimited");
+              changePath("/unlimited");
+              return;
+            }
           }
+          setGame(value);
         }
-        setGame(value);
+      } catch (e) {
+        if (id === requestId.current) setError(e);
+      } finally {
+        if (id === requestId.current) setPending(false);
       }
-    } catch (e) {
-      if (id === requestId.current) setError(e);
-    } finally {
-      if (id === requestId.current) setPending(false);
-    }
-  }, [path, startUnlimited]);
+    },
+    [archiveList, changePath, ensureVisitor, isArchive, path, persistDailyResult, startUnlimited],
+  );
   useEffect(() => {
     void load();
     return () => {
@@ -212,12 +291,9 @@ export default function App() {
   }, [load]);
   useEffect(() => {
     const controller = new AbortController();
-    api<{ packs: Pack[]; catalogSize: number; dataSources?: string[] }>(
-      "/packs",
-      undefined,
-      controller.signal,
-    )
+    publicRead<CatalogInfo>("/packs", controller.signal)
       .then((b) => {
+        if (controller.signal.aborted) return;
         setPacks(b.packs);
         setCatalogSize(b.catalogSize);
         setTmdbData(b.dataSources?.includes("tmdb") ?? false);
@@ -226,9 +302,11 @@ export default function App() {
     return () => controller.abort();
   }, []);
   useEffect(() => {
+    if (isArchive) return;
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [isArchive]);
   useEffect(() => {
     if (
       game?.mode === "daily" &&
@@ -238,19 +316,6 @@ export default function App() {
     )
       void load();
   }, [game, now, load, pending]);
-  useEffect(() => {
-    if (game?.mode !== "daily" || game.status === "playing" || !game.date) return;
-    const record = { date: game.date, won: game.status === "won", attempts: game.guesses.length };
-    let active = true;
-    void saveRecord(record).then((result) => {
-      if (!active) return;
-      if (result.saved) setRecords(result.records);
-      else setNotice("localUnavailable");
-    });
-    return () => {
-      active = false;
-    };
-  }, [game]);
   useEffect(() => {
     const sync = (event: StorageEvent) => {
       if (event.key !== recordsKey && event.key !== null) return;
@@ -265,17 +330,18 @@ export default function App() {
     setPending(true);
     setError(null);
     const id = requestId.current;
-    const endpoint =
-      game.mode === "daily"
-        ? "/daily/guess"
-        : game.mode === "challenge"
-          ? `/challenges/${path.split("/")[2]}/guess`
-          : `/unlimited/${game.id}/guess`;
+    const endpoint = {
+      daily: "/daily/guess",
+      archive: `/archive/${game.date}/guess`,
+      challenge: `/challenges/${path.split("/")[2]}/guess`,
+      unlimited: `/unlimited/${game.id}/guess`,
+    }[game.mode];
     try {
       const value = await api<GameView>(endpoint, {
         movieId: movie.id,
-        ...(game.mode === "daily" ? { gameId: game.id } : {}),
+        ...(game.mode === "daily" || game.mode === "archive" ? { gameId: game.id } : {}),
       });
+      persistDailyResult(value, id);
       if (id === requestId.current) {
         setGame(value);
         if (value.status === "won" && game.status === "playing") setCelebration(value.id);
@@ -292,7 +358,10 @@ export default function App() {
     const id = requestId.current;
     setPending(true);
     try {
-      const value = await api<GameView>(`/games/${game.id}/hints`, { kind });
+      const value =
+        game.mode === "archive"
+          ? await api<GameView>(`/archive/${game.date}/hints`, { kind, gameId: game.id })
+          : await api<GameView>(`/games/${game.id}/hints`, { kind });
       if (id === requestId.current) setGame(value);
     } finally {
       if (id === requestId.current) setPending(false);
@@ -309,6 +378,8 @@ export default function App() {
         unlimitedSession.current = saved;
         saveUnlimitedSession(saved);
         setGame(value);
+        setNotice("");
+        setFallbackShare("");
         navigate("/unlimited");
       }
     } catch (e) {
@@ -322,6 +393,8 @@ export default function App() {
     setError(null);
     const id = requestId.current;
     try {
+      await ensureVisitor();
+      if (id !== requestId.current) return;
       const value = await api<{ path: string }>("/challenges", { movieId: movie.id });
       if (id === requestId.current) {
         setCreatedChallenge({ url: `${window.location.origin}${value.path}`, movie });
@@ -335,20 +408,22 @@ export default function App() {
   }
   async function share() {
     if (!game) return;
+    const id = requestId.current;
     const text = shareText(game, t);
     try {
       if (navigator.share) {
         try {
           await navigator.share({ text });
-          setNotice("shared");
+          if (id === requestId.current) setNotice("shared");
           return;
         } catch (e) {
           if (e instanceof DOMException && e.name === "AbortError") return;
         }
       }
       await navigator.clipboard.writeText(text);
-      setNotice("shared");
+      if (id === requestId.current) setNotice("shared");
     } catch (e) {
+      if (id !== requestId.current) return;
       if (e instanceof DOMException && e.name === "AbortError") return;
       setFallbackShare(text);
       setNotice("shareUnavailable");
@@ -369,22 +444,20 @@ export default function App() {
   const countdown = [Math.floor(seconds / 3600), Math.floor((seconds % 3600) / 60), seconds % 60]
     .map((n) => String(n).padStart(2, "0"))
     .join(":");
-  const mode = builder
-    ? "challenge"
-    : (game?.mode ??
-      (path === "/unlimited" || path.startsWith("/unlimited/")
+  const mode = isArchive
+    ? "archive"
+    : builder || path.startsWith("/challenge/")
+      ? "challenge"
+      : path === "/unlimited" || path.startsWith("/unlimited/")
         ? "unlimited"
-        : path.startsWith("/challenge/")
-          ? "challenge"
-          : "daily"));
-  const date = game?.date
-    ? new Intl.DateTimeFormat(locale === "en" ? "en-GB" : locale, {
-        day: "numeric",
-        month: "long",
-        year: "numeric",
-        timeZone: "UTC",
-      }).format(new Date(`${game.date}T00:00:00Z`))
-    : "";
+        : "daily";
+  const dateFormat = new Intl.DateTimeFormat(locale === "en" ? "en-GB" : locale, {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const formatDate = (date: string) => dateFormat.format(new Date(`${date}T00:00:00Z`));
   return (
     <>
       <header className="site-header">
@@ -404,10 +477,16 @@ export default function App() {
             type="button"
             aria-current={mode === "daily" ? "page" : undefined}
             onClick={() => navigate("/")}
-            disabled={pending}
           >
             {t.daily}
             <span className="live-dot" />
+          </button>
+          <button
+            type="button"
+            aria-current={mode === "archive" ? "page" : undefined}
+            onClick={() => navigate("/archive")}
+          >
+            {t.archive}
           </button>
           <button
             type="button"
@@ -504,23 +583,61 @@ export default function App() {
         </div>
       </header>
       <main>
-        <section className="intro">
+        <section className={archiveList ? "intro archive-intro" : "intro"}>
           <div className="intro-copy">
-            <h1>{builder ? t.challengeTitle : t.headline}</h1>
+            <h1>{archiveList ? t.archive : builder ? t.challengeTitle : t.headline}</h1>
             <p>
-              {builder
-                ? t.challengeIntro
-                : mode === "unlimited"
-                  ? t.practice
-                  : mode === "challenge"
-                    ? t.friend
-                    : t.intro}
+              {archiveList
+                ? t.archiveIntro
+                : builder
+                  ? t.challengeIntro
+                  : mode === "unlimited"
+                    ? t.practice
+                    : mode === "challenge"
+                      ? t.friend
+                      : t.intro}
             </p>
           </div>
-          <FilmShelf label={t.posterArt} locale={locale} />
+          {!archiveList && <FilmShelf label={t.posterArt} locale={locale} />}
         </section>
         <section className="game-panel" aria-busy={pending}>
-          {builder ? (
+          {archiveList ? (
+            archivePage ? (
+              <div className="archive-puzzles">
+                {archivePage.dates.length === 0 ? (
+                  <p>{t.archiveEmpty}</p>
+                ) : (
+                  <ol className="archive-dates">
+                    {archivePage.dates.map((day) => (
+                      <li key={day}>
+                        <a href={`/archive/${day}`} onClick={followRoute}>
+                          <time dateTime={day}>{formatDate(day)}</time>
+                          <span aria-hidden="true">›</span>
+                        </a>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+                {archivePage.nextBefore && (
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => void load(archivePage.nextBefore ?? undefined)}
+                    >
+                      {t.archiveMore}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              pending && (
+                <p className="loading" role="status">
+                  {t.loading}
+                </p>
+              )
+            )
+          ) : builder ? (
             <>
               <div className="panel-heading">
                 <span>{t.challenge}</span>
@@ -559,12 +676,23 @@ export default function App() {
               <div className="panel-heading">
                 <span>
                   <span className="tiny-square" /> {mode === "daily" ? t.today : t[mode]}{" "}
-                  {date && <small>{date}</small>}
+                  {game?.date && (
+                    <small>
+                      <time dateTime={game.date}>{formatDate(game.date)}</time>
+                    </small>
+                  )}
                 </span>
                 <span className="attempt-count">
                   {game ? `${game.guesses.length} / ${game.maxAttempts}` : "— / 8"}
                 </span>
               </div>
+              {isArchive && (
+                <div className="archive-return">
+                  <a href="/" onClick={followRoute}>
+                    {t.backToDaily}
+                  </a>
+                </div>
+              )}
               {mode === "unlimited" && (
                 <div className="game-options">
                   <label>
@@ -675,9 +803,9 @@ export default function App() {
                         <button
                           type="button"
                           disabled={pending}
-                          onClick={() => void newUnlimited()}
+                          onClick={() => (isArchive ? navigate("/archive") : void newUnlimited())}
                         >
-                          {t.next}
+                          {isArchive ? t.archive : t.next}
                         </button>
                       </div>
                     </section>
@@ -698,7 +826,11 @@ export default function App() {
           {error !== null && (
             <div className="error" role="alert">
               <p>{errorMessage(error, t)}</p>
-              <button type="button" disabled={pending} onClick={() => void load()}>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => void load(archivePage?.nextBefore ?? undefined)}
+              >
                 {t.retry}
               </button>
             </div>
@@ -718,7 +850,7 @@ export default function App() {
             />
           )}
         </section>
-        <Tips t={t} />
+        {!archiveList && <Tips t={t} />}
         <div className="below-game">
           {game?.mode === "daily" && !builder && (
             <p className="countdown">

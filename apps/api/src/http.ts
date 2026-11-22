@@ -15,6 +15,10 @@ const uuid = z.uuid();
 const hintBody = z.object({ kind: z.enum(hintKinds) }).strict();
 const guessBody = z.object({ movieId: z.string().min(1).max(120) }).strict();
 const dailyGuessBody = guessBody.extend({ gameId: uuid.optional() });
+const archiveDate = z.iso.date().refine((date) => !date.startsWith("0000"));
+const archiveOpenBody = z.strictObject({});
+const archiveGuessBody = guessBody.extend({ gameId: uuid });
+const archiveHintBody = hintBody.extend({ gameId: uuid });
 const unlimitedBody = z
   .object({
     difficulty: z.enum(["easy", "normal", "hard"]).default("normal"),
@@ -152,6 +156,25 @@ export function createHandler(
             : req.headers.get("if-match") === `"${game.id}"`;
         if (!matches) throw new ApiError(409, "daily_expired");
         return send(200, await games.guess(game.id, visitor, b.movieId));
+      }
+      if (method === "GET" && path === "/api/archive") {
+        const before = archiveDate.optional().parse(url.searchParams.get("before") ?? undefined);
+        return send(200, await games.archiveDates(before));
+      }
+      const archiveRoute = path.match(/^\/api\/archive\/([^/]+)(?:\/(guess|hints))?$/);
+      if (method === "POST" && archiveRoute) {
+        const date = archiveDate.parse(archiveRoute[1]);
+        const input = await body(req);
+        if (archiveRoute[2] === "guess") {
+          const b = archiveGuessBody.parse(input);
+          return send(200, await games.guess(b.gameId, visitor, b.movieId, date));
+        }
+        if (archiveRoute[2] === "hints") {
+          const b = archiveHintBody.parse(input);
+          return send(200, await games.hint(b.gameId, visitor, b.kind, date));
+        }
+        archiveOpenBody.parse(input);
+        return send(200, await games.archive(date, visitor));
       }
       const hintRoute = path.match(/^\/api\/games\/([^/]+)\/hints$/);
       if (method === "POST" && hintRoute) {

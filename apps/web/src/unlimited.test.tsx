@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GameView } from "../../../packages/game-engine/src/model.ts";
@@ -39,6 +39,7 @@ function mockApi(saved: Record<string, GameView> = { first: game }) {
         ],
         catalogSize: 100,
       };
+    else if (url === "/api/movies/search?q=") body = { movies: [] };
     else if (url === "/api/daily") body = { ...game, id: "daily", mode: "daily" };
     else if (url === "/api/unlimited" && init?.method === "POST") {
       count++;
@@ -187,28 +188,24 @@ it("resumes in memory when sessionStorage is blocked", async () => {
 });
 it("does not create a second replacement when an earlier missing-session response arrives late", async () => {
   sessionStorage.setItem(key, JSON.stringify({ id: "deleted", pack: "popular" }));
-  window.history.replaceState({}, "", "/unlimited");
   const api = mockApi();
   const implementation = api.fetch.getMockImplementation();
   if (!implementation) throw new Error("Missing API mock");
-  let release: (() => void) | undefined;
+  const delayed = Promise.withResolvers<void>();
   let reads = 0;
   api.fetch.mockImplementation(async (url: string, init?: RequestInit) => {
-    if (url === "/api/unlimited/deleted" && ++reads === 2) {
-      await new Promise<void>((resolve) => {
-        release = resolve;
-      });
-    }
+    if (url === "/api/unlimited/deleted" && ++reads === 1) await delayed.promise;
     return implementation(url, init);
   });
-  render(
-    <StrictMode>
-      <App />
-    </StrictMode>,
-  );
+  render(<App />);
+  await ready();
+  fireEvent.click(screen.getByRole("button", { name: "Unlimited" }));
+  await waitFor(() => expect(reads).toBe(1));
+  fireEvent.click(screen.getByRole("button", { name: "Daily" }));
+  await ready();
+  fireEvent.click(screen.getByRole("button", { name: "Unlimited" }));
   await waitFor(() => expect(sessionStorage.getItem(key)).toContain("new-1"));
-  if (!release) throw new Error("Missing delayed response");
-  release();
+  await act(async () => delayed.resolve());
   await ready();
   expect(api.created()).toHaveLength(1);
 });

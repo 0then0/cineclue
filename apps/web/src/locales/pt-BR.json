@@ -1,5 +1,10 @@
 {
   "daily": "Filme do dia",
+  "archive": "Arquivo",
+  "archiveIntro": "Escolha um desafio de um dia anterior. Os resultados do arquivo não contam para as estatísticas do filme do dia.",
+  "archiveEmpty": "Ainda não há desafios salvos de dias anteriores.",
+  "archiveMore": "Mostrar datas anteriores",
+  "backToDaily": "Voltar ao desafio de hoje",
   "unlimited": "Sem limites",
   "challenge": "Desafio",
   "stats": "Estatísticas",
@@ -155,6 +160,7 @@
   "error": "Não foi possível conectar ao servidor. Tente novamente.",
   "already_guessed": "Você já tentou este filme.",
   "daily_expired": "Um novo filme do dia está disponível. Recarregue a partida.",
+  "archive_unavailable": "Não há um desafio no arquivo para esta data.",
   "rate_limited": "Muitas solicitações. Tente novamente em um minuto.",
   "game_finished": "Esta partida terminou. Recarregue para ver o resultado.",
   "not_found": "Esta partida não foi encontrada para este navegador.",

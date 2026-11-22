@@ -1,4 +1,4 @@
-import { writeStorage } from "./client.ts";
+import { withBrowserLock, writeStorage } from "./client.ts";
 import { type DailyRecord, dailyAttemptLimit } from "./results.ts";
 
 export const recordsKey = "cineclue:records";
@@ -65,25 +65,8 @@ export function readRecords(): DailyRecord[] {
   return readStoredRecords() ?? [];
 }
 
-async function withRecordsLock<T>(update: () => T): Promise<T> {
-  let started = false;
-  try {
-    const locks = navigator.locks;
-    if (locks) {
-      return await locks.request(recordsKey, () => {
-        started = true;
-        return update();
-      });
-    }
-  } catch (error) {
-    if (started) throw error;
-  }
-  // Without Web Locks, reread and merge without cross-tab isolation.
-  return update();
-}
-
 export function saveRecord(record: DailyRecord) {
-  return withRecordsLock(() => {
+  return withBrowserLock(recordsKey, () => {
     const current = readStoredRecords();
     if (!current) return { records: [], saved: false };
     const records = current.some((r) => r.date === record.date)
@@ -175,7 +158,7 @@ export function planHistoryImport(incoming: DailyRecord[], current: DailyRecord[
 }
 
 export function applyHistoryImport(incoming: DailyRecord[], preview: HistoryImportPlan) {
-  return withRecordsLock(() => {
+  return withBrowserLock(recordsKey, () => {
     const current = readStoredRecords();
     if (!current) return { status: "unavailable" } as const;
     const plan = planHistoryImport(incoming, current);

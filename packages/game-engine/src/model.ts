@@ -36,7 +36,7 @@ export const movieSchema = z.object({
 export type Entity = z.infer<typeof entitySchema>;
 export type Movie = z.infer<typeof movieSchema>;
 export type Difficulty = "easy" | "normal" | "hard";
-export type Mode = "daily" | "unlimited" | "challenge";
+export type Mode = "daily" | "archive" | "unlimited" | "challenge";
 export type Status = "exact" | "close" | "partial" | "miss";
 export type NumericResult = { status: Status; value: number; direction: "higher" | "lower" | null };
 export type SetResult = { status: Status; values: Entity[]; matches: Entity[] };
@@ -51,6 +51,7 @@ export type Comparison = {
 };
 export type PublicMovie = Pick<Movie, "id" | "title" | "titles" | "originalTitle" | "releaseYear">;
 export type GuessView = { movie: PublicMovie; comparison: Comparison };
+export type ArchivePage = { dates: string[]; nextBefore: string | null };
 export type GameView = {
   id: string;
   mode: Mode;
