@@ -2,7 +2,13 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { z } from "zod";
 import { pool, transaction } from "./db.ts";
 import { ApiError, utcDate } from "./game.ts";
-import { authorizationUrl, type TelegramConfig, telegramOidc, verifyInitData } from "./telegram.ts";
+import {
+  authorizationUrl,
+  type TelegramConfig,
+  TelegramOidcFailure,
+  telegramOidc,
+  verifyInitData,
+} from "./telegram.ts";
 
 const visitorCookie = "cineclue_visitor";
 const sessionCookie = "__Host-cineclue_session";
@@ -154,6 +160,18 @@ export class TelegramSessions {
       headers.set("Referrer-Policy", "no-referrer");
       return new Response(null, { status: 303, headers });
     };
+    const fail = (path: string, reason: string, failure?: TelegramOidcFailure) => {
+      // Log fixed codes and HTTP status, never provider bodies or credentials.
+      console.warn(
+        JSON.stringify({
+          event: "telegram_oidc_failed",
+          reason,
+          upstreamStatus: failure?.upstreamStatus,
+          upstreamCode: failure?.upstreamCode,
+        }),
+      );
+      return redirect(path, "failed");
+    };
     const states = url.searchParams.getAll("state");
     const state = states[0];
     if (
@@ -161,7 +179,7 @@ export class TelegramSessions {
       !/^[\w-]{43}$/.test(state) ||
       state !== readCookie(req, attemptCookie)
     ) {
-      return redirect("/", "failed");
+      return fail("/", "callback_state");
     }
     const stateHash = hash(state);
     // Claim the code once, while keeping the attempt cancellable during the exchange.
@@ -172,7 +190,7 @@ export class TelegramSessions {
       [visitor, stateHash],
     );
     const attempt = rows[0];
-    if (!attempt) return redirect("/", "failed");
+    if (!attempt) return fail("/", "attempt_unavailable");
     const issuers = url.searchParams.getAll("iss");
     const codes = url.searchParams.getAll("code");
     const errors = url.searchParams.getAll("error");
@@ -180,19 +198,23 @@ export class TelegramSessions {
       issuers.length > 1 ||
       (issuers.length === 1 && issuers[0] !== "https://oauth.telegram.org")
     ) {
-      return redirect(attempt.return_path, "failed");
+      return fail(attempt.return_path, "callback_issuer");
     }
     if (errors.length === 1 && errors[0] === "access_denied" && codes.length === 0) {
       return redirect(attempt.return_path, "cancelled");
     }
     if (errors.length || codes.length !== 1 || !codes[0] || codes[0].length > 2048) {
-      return redirect(attempt.return_path, "failed");
+      return fail(attempt.return_path, "callback_code");
     }
+    let stage = "code_exchange";
     try {
       const id = await this.exchange(codes[0], attempt.verifier, attempt.nonce);
+      stage = "session_creation";
       await this.signIn(headers, visitor, id, stateHash);
-    } catch {
-      return redirect(attempt.return_path, "failed");
+    } catch (error) {
+      return error instanceof TelegramOidcFailure
+        ? fail(attempt.return_path, error.reason, error)
+        : fail(attempt.return_path, stage);
     }
     return redirect(attempt.return_path, "signed-in");
   }

@@ -90,7 +90,7 @@ const claims = z.object({
   aud: z.string(),
   sub: z.string().min(1),
   id: telegramId,
-  nonce: z.string(),
+  nonce: z.string().optional(),
   iat: z.number().int().positive(),
   exp: z.number().int().positive(),
   nbf: z.number().int().positive().optional(),
@@ -104,6 +104,35 @@ const rsaKey = z.object({
   e: z.string(),
 });
 
+type OidcFailureReason =
+  | "token_request"
+  | "token_response"
+  | "jwks"
+  | "id_token_header"
+  | "id_token_key"
+  | "id_token_signature"
+  | "id_token_claims"
+  | "id_token_nonce";
+
+const tokenErrorCode = z.enum([
+  "invalid_client",
+  "invalid_grant",
+  "invalid_request",
+  "unauthorized_client",
+  "unsupported_grant_type",
+  "invalid_scope",
+]);
+
+export class TelegramOidcFailure extends ApiError {
+  constructor(
+    readonly reason: OidcFailureReason,
+    readonly upstreamStatus?: number,
+    readonly upstreamCode?: z.infer<typeof tokenErrorCode>,
+  ) {
+    super(401, "telegram_invalid");
+  }
+}
+
 export function verifyIdToken(
   token: string,
   keys: unknown[],
@@ -111,18 +140,22 @@ export function verifyIdToken(
   nonce: string,
   now = Math.floor(Date.now() / 1000),
 ) {
-  const invalid = () => new ApiError(401, "telegram_invalid");
-  if (token.length > 16_384 || !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(token)) throw invalid();
+  let reason: OidcFailureReason = "id_token_header";
   try {
+    if (token.length > 16_384 || !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(token)) {
+      throw new TelegramOidcFailure(reason);
+    }
     const [header, payload, signature] = token.split(".");
     const { kid } = jwtHeader.parse(JSON.parse(Buffer.from(header, "base64url").toString("utf8")));
+    reason = "id_token_key";
     const key = keys.find((value) => {
       const parsed = rsaKey.safeParse(value);
       return parsed.success && parsed.data.kid === kid;
     });
-    if (!key) throw invalid();
+    if (!key) throw new TelegramOidcFailure(reason);
     const { n, e } = rsaKey.parse(key);
     const publicKey = createPublicKey({ key: { kty: "RSA", n, e }, format: "jwk" });
+    reason = "id_token_signature";
     if (
       !verify(
         "RSA-SHA256",
@@ -131,23 +164,27 @@ export function verifyIdToken(
         Buffer.from(signature, "base64url"),
       )
     ) {
-      throw invalid();
+      throw new TelegramOidcFailure(reason);
     }
+    reason = "id_token_claims";
     const data = claims.parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
     if (
       data.aud !== clientId ||
-      data.nonce !== nonce ||
       data.exp <= now ||
       data.iat > now + clockSkew ||
       data.exp <= data.iat ||
       (data.nbf !== undefined && data.nbf > now + clockSkew)
     ) {
-      throw invalid();
+      throw new TelegramOidcFailure(reason);
+    }
+    if (data.nonce === undefined || data.nonce !== nonce) {
+      throw new TelegramOidcFailure("id_token_nonce");
     }
     // Telegram documents the numeric user ID in profile separately from the OIDC subject.
     return data.id;
-  } catch {
-    throw invalid();
+  } catch (error) {
+    if (error instanceof TelegramOidcFailure) throw error;
+    throw new TelegramOidcFailure(reason);
   }
 }
 
@@ -180,10 +217,14 @@ export function telegramOidc(config: TelegramConfig) {
       signal: AbortSignal.timeout(5000),
     })
       .then(async (response) => {
-        if (!response.ok) throw new Error("Telegram JWKS unavailable");
+        if (!response.ok) throw new TelegramOidcFailure("jwks", response.status);
         const { keys } = z.object({ keys: z.array(z.unknown()) }).parse(await response.json());
         cached = { keys, expires: Date.now() + 3_600_000 };
         return keys;
+      })
+      .catch((error) => {
+        if (error instanceof TelegramOidcFailure) throw error;
+        throw new TelegramOidcFailure("jwks");
       })
       .finally(() => {
         pending = undefined;
@@ -192,6 +233,7 @@ export function telegramOidc(config: TelegramConfig) {
   }
 
   return async (code: string, verifier: string, nonce: string) => {
+    let reason: OidcFailureReason = "token_request";
     try {
       const response = await fetch(`${issuer}/token`, {
         method: "POST",
@@ -208,7 +250,12 @@ export function telegramOidc(config: TelegramConfig) {
           code_verifier: verifier,
         }),
       });
-      if (!response.ok) throw new ApiError(401, "telegram_invalid");
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        const error = z.object({ error: tokenErrorCode }).safeParse(body);
+        throw new TelegramOidcFailure(reason, response.status, error.data?.error);
+      }
+      reason = "token_response";
       const { id_token } = z.object({ id_token: z.string() }).parse(await response.json());
       if (!cached || cached.expires <= Date.now()) {
         return verifyIdToken(id_token, await loadKeys(), config.clientId, nonce);
@@ -219,8 +266,9 @@ export function telegramOidc(config: TelegramConfig) {
       } catch {
         return verifyIdToken(id_token, await loadKeys(), config.clientId, nonce);
       }
-    } catch {
-      throw new ApiError(401, "telegram_invalid");
+    } catch (error) {
+      if (error instanceof TelegramOidcFailure) throw error;
+      throw new TelegramOidcFailure(reason);
     }
   };
 }

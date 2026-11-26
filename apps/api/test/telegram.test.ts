@@ -1,5 +1,5 @@
-import { expect, it } from "vitest";
-import { telegramConfig, verifyIdToken, verifyInitData } from "../src/telegram.ts";
+import { expect, it, vi } from "vitest";
+import { telegramConfig, telegramOidc, verifyIdToken, verifyInitData } from "../src/telegram.ts";
 import { idToken, initData, telegram, telegramJwk, testUserId } from "./telegram-fixtures.ts";
 
 it("validates Mini App data and uses a Telegram ID beyond 32 bits", () => {
@@ -38,6 +38,9 @@ it("uses the signed OIDC profile id and validates signature, client, issuer, non
     verifyIdToken(token, [telegramJwk], telegram.clientId, "fixture-nonce", now);
   const token = idToken(valid);
   expect(verify(token)).toBe(testUserId);
+  expect(() => verify(idToken({ ...valid, nonce: undefined }))).toThrow(
+    expect.objectContaining({ reason: "id_token_nonce" }),
+  );
   const [header, payload, signature] = token.split(".");
   expect(() =>
     verify(`${header}.${payload}.${signature[0] === "a" ? "b" : "a"}${signature.slice(1)}`),
@@ -61,6 +64,33 @@ it("uses the signed OIDC profile id and validates signature, client, issuer, non
   expect(() => verify(idToken(valid, { alg: "RS256", kid: "different-key" }))).toThrow(
     "telegram_invalid",
   );
+});
+
+it("classifies token exchange failures without exposing provider-supplied messages", async () => {
+  const request = vi.spyOn(globalThis, "fetch");
+  const exchange = telegramOidc(telegram);
+  try {
+    request.mockResolvedValueOnce(
+      Response.json(
+        { error: "invalid_client", error_description: "private detail" },
+        { status: 401 },
+      ),
+    );
+    await expect(exchange("code", "verifier", "nonce")).rejects.toMatchObject({
+      message: "telegram_invalid",
+      reason: "token_request",
+      upstreamStatus: 401,
+      upstreamCode: "invalid_client",
+    });
+    request.mockResolvedValueOnce(Response.json({ error: "private detail" }, { status: 400 }));
+    await expect(exchange("code", "verifier", "nonce")).rejects.toMatchObject({
+      reason: "token_request",
+      upstreamStatus: 400,
+      upstreamCode: undefined,
+    });
+  } finally {
+    request.mockRestore();
+  }
 });
 
 it("requires HTTPS and credentials from the same bot when Telegram is enabled", () => {
