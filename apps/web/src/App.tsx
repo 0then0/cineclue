@@ -61,6 +61,7 @@ type Pack = {
 };
 type CatalogInfo = { packs: Pack[]; catalogSize: number; dataSources?: string[] };
 type Theme = "system" | "light" | "dark";
+const themeIcons: Record<Theme, string> = { system: "◐", light: "☀", dark: "☾" };
 const route = () => window.location.pathname;
 function errorMessage(e: unknown, t: Messages) {
   return e instanceof HttpError && e.code in t ? t[e.code as keyof Messages] : t.error;
@@ -685,16 +686,27 @@ function GameApp({
               <rect x="16" y="4" width="3" height="14" rx="0.8" fill="currentColor" />
             </svg>
           </button>
-          <select
-            value={theme}
-            onChange={(e) => setTheme(e.target.value as Theme)}
-            aria-label={t.system}
-            className="theme-select"
-          >
-            <option value="system">◐ {t.system}</option>
-            <option value="light">☀ {t.light}</option>
-            <option value="dark">☾ {t.dark}</option>
-          </select>
+          <span className="theme-control">
+            <select
+              value={theme}
+              onChange={(e) => setTheme(e.target.value as Theme)}
+              aria-label={t.system}
+              className="theme-select"
+            >
+              <option value="system">
+                {themeIcons.system} {t.system}
+              </option>
+              <option value="light">
+                {themeIcons.light} {t.light}
+              </option>
+              <option value="dark">
+                {themeIcons.dark} {t.dark}
+              </option>
+            </select>
+            <span className="theme-icon" aria-hidden="true">
+              {themeIcons[theme]}
+            </span>
+          </span>
           <select
             className="language-select"
             data-locale={locale}

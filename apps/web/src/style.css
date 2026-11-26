@@ -129,6 +129,7 @@ button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible,
+:where(.theme-select:focus-visible) + .theme-icon,
 summary:focus-visible,
 textarea:focus-visible {
   outline: 3px solid #4e9bce;
@@ -194,6 +195,9 @@ small {
   color: var(--muted);
   padding: 8px;
   min-height: 42px;
+}
+.theme-icon {
+  display: none;
 }
 main {
   max-width: 1160px;
@@ -1013,9 +1017,6 @@ footer {
   }
   .brand small {
     font-size: 8px;
-  }
-  .theme-select {
-    width: 42px;
   }
   .utilities {
     gap: 2px;
@@ -2437,6 +2438,36 @@ footer .catalog-credit {
 .language-select[data-locale="pt-BR"] {
   width: 84px;
 }
+@media (max-width: 760px) {
+  .theme-control {
+    display: grid;
+    flex-shrink: 0;
+  }
+  .theme-select,
+  .theme-icon {
+    grid-area: 1 / 1;
+  }
+  .theme-select {
+    width: 44px;
+    min-height: 44px;
+    opacity: 0;
+  }
+  .theme-icon {
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--ink);
+    background: var(--paper);
+    font-size: 20px;
+    line-height: 1;
+    pointer-events: none;
+  }
+  .theme-select:focus-visible + .theme-icon,
+  .language-select:focus-visible {
+    outline-offset: -3px;
+  }
+}
 :lang(ja) h1 {
   line-height: 1.4;
   letter-spacing: 0;
@@ -2460,15 +2491,18 @@ footer .catalog-credit {
 }
 @media (max-width: 540px) {
   .site-header {
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
   }
   .brand {
+    align-items: center;
     font-size: 18px;
     gap: 6px;
   }
   .brand img {
     width: 30px;
-    height: 30px;
+    min-width: 0;
+    height: auto;
   }
   .utilities {
     gap: 2px;
@@ -2484,10 +2518,6 @@ footer .catalog-credit {
     width: 24px;
     height: 24px;
     flex-shrink: 0;
-  }
-  .theme-select {
-    width: 28px;
-    padding: 3px;
   }
   .language-select {
     padding: 4px 2px;

@@ -13,6 +13,7 @@ published versions; unreleased changes do not imply a production deployment.
 
 ### Fixed
 
+- The theme picker stays visible and separate from the language picker on mobile screens.
 - Daily guesses send their session identity in JSON so hosting proxies cannot consume the
   conditional header required to submit an answer. Stale games remain rejected; older clients
   using `If-Match` are still supported.
