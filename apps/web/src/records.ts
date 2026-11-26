@@ -45,10 +45,10 @@ function isCompletedRecord(record: unknown, today: string): record is DailyRecor
   );
 }
 
-export function readStoredRecords(): DailyRecord[] | null {
+export function readStoredRecords(key = recordsKey): DailyRecord[] | null {
   let raw: string | null;
   try {
-    raw = localStorage.getItem(recordsKey);
+    raw = localStorage.getItem(key);
   } catch {
     return null;
   }
@@ -61,18 +61,18 @@ export function readStoredRecords(): DailyRecord[] | null {
   }
 }
 
-export function readRecords(): DailyRecord[] {
-  return readStoredRecords() ?? [];
+export function readRecords(key = recordsKey): DailyRecord[] {
+  return readStoredRecords(key) ?? [];
 }
 
-export function saveRecord(record: DailyRecord) {
-  return withBrowserLock(recordsKey, () => {
-    const current = readStoredRecords();
+export function saveRecord(record: DailyRecord, key = recordsKey) {
+  return withBrowserLock(key, () => {
+    const current = readStoredRecords(key);
     if (!current) return { records: [], saved: false };
     const records = current.some((r) => r.date === record.date)
       ? current
       : [...current, record].sort(compareDates);
-    return { records, saved: writeStorage(recordsKey, records) };
+    return { records, saved: writeStorage(key, records) };
   });
 }
 
@@ -157,9 +157,13 @@ export function planHistoryImport(incoming: DailyRecord[], current: DailyRecord[
   return plan;
 }
 
-export function applyHistoryImport(incoming: DailyRecord[], preview: HistoryImportPlan) {
-  return withBrowserLock(recordsKey, () => {
-    const current = readStoredRecords();
+export function applyHistoryImport(
+  incoming: DailyRecord[],
+  preview: HistoryImportPlan,
+  key = recordsKey,
+) {
+  return withBrowserLock(key, () => {
+    const current = readStoredRecords(key);
     if (!current) return { status: "unavailable" } as const;
     const plan = planHistoryImport(incoming, current);
     // Compare the date-level decisions and displayed results, including changes within conflicts.
@@ -167,7 +171,7 @@ export function applyHistoryImport(incoming: DailyRecord[], preview: HistoryImpo
       return { status: "changed", plan } as const;
     if (!plan.additions.length) return { status: "saved", records: current } as const;
     const records = [...current, ...plan.additions].sort(compareDates);
-    return writeStorage(recordsKey, records)
+    return writeStorage(key, records)
       ? ({ status: "saved", records } as const)
       : ({ status: "unavailable" } as const);
   });

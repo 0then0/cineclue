@@ -7,6 +7,7 @@ published versions; unreleased changes do not imply a production deployment.
 
 ### Added
 
+- Open CineClue's Daily and spoiler-free Challenge links in a Telegram Main Mini App. Use the same bot for optional website sign-in and today's account Daily. Guest play and local Daily history remain available.
 - Play saved Daily puzzles from past UTC dates in Archive, with resumable progress separate from Daily statistics and history exports.
 - Export completed Daily games from Statistics and import them in another browser with a conflict preview.
 

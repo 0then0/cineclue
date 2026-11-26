@@ -1,8 +1,10 @@
 import { pool } from "../../apps/api/src/db.ts";
+import { cleanupTelegramSessions } from "../../apps/api/src/sessions.ts";
 
 export default async () => {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
   const result = await pool.query("DELETE FROM rate_limit WHERE expires_at<now()");
+  await cleanupTelegramSessions();
   console.log(JSON.stringify({ event: "rate_limits_cleaned", rows: result.rowCount }));
 };
 

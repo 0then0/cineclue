@@ -1,12 +1,23 @@
 # HTTP API
 
-The application exposes a same-origin JSON API under `/api`. Browser requests include an HttpOnly `cineclue_visitor` cookie. This cookie is the anonymous session credential; keep it private. UUIDs are generated cryptographically on the server.
+The application exposes a same-origin JSON API under `/api`. The HttpOnly `cineclue_visitor` cookie identifies the guest game. Telegram sign-in issues a separate Secure, HttpOnly, SameSite=Lax `__Host-cineclue_session` cookie. Both entry points use the same CineClue session model. Signing out revokes the authenticated cookie and restores the guest state in that client.
 
 Session and search responses use `Cache-Control: no-store`. Media metadata uses `Cache-Control: private, max-age=900` in addition to the application caches described in [data and media](DATA.md#images-and-caching).
 
+## Player session
+
+- `GET /session` establishes the visitor cookie and returns `{ "telegramBot": null, "player": null, "guestDaily": false }` for a guest when Telegram is disabled. With Telegram configured, `telegramBot` is the bot username. A signed-in `player` has an opaque `key` and `expiresInMs`. `guestDaily` indicates that this client has a separate guest Daily with guesses today.
+- `POST /auth/telegram/start` accepts `{ "returnTo": "/challenge" }` and returns the authorization `{ "url": "..." }`. Navigate to that URL in the browser. The server stores a 10-minute login attempt with S256 PKCE, state, nonce and an allowed return path. A separate Secure HttpOnly cookie binds the attempt to the browser.
+- `GET /auth/telegram/callback` claims the attempt once, exchanges the code and verifies the signed ID token. It issues a session only while the claimed attempt is current for the browser. It redirects with HTTP 303 and `telegram=signed-in`, `telegram=cancelled` or `telegram=failed`.
+- `POST /auth/telegram/mini-app` accepts `{ "initData": "<raw Telegram.WebApp.initData>" }` after the player chooses to sign in. The server validates the bot HMAC and a 10-minute freshness window, then returns the player session with a `miniAppProof` for the current WebView.
+- `POST /auth/telegram/mini-app/resume` accepts the same body. Call it when `GET /session` with `X-CineClue-Mini-App: guest` returns `resumeMiniApp: true`. The server checks fresh `initData` against the account on the existing cookie. A different account, stale launch or missing session returns the guest view. A matching launch also returns `miniAppProof`.
+- `POST /auth/logout` accepts `{}` and returns the guest session view. Authenticated CineClue sessions expire after 14 days and can be revoked independently on each client.
+
+Mini App requests send `X-CineClue-Mini-App: guest` before sign-in or `X-CineClue-Mini-App: <miniAppProof>` for the lifetime of the loaded page. The proof works together with the Mini App session cookie. Site requests omit that header and use website sessions. Player-sensitive requests can add `X-CineClue-Player` with the current opaque key or `guest`. A mismatched session returns `409 session_changed` so clients can discard stale game state. These authentication endpoints require [Telegram configuration](TELEGRAM.md).
+
 ## Daily
 
-- `GET /daily` creates or resumes the current UTC Daily session. A visitor cookie is issued when needed.
+- `GET /daily` creates or resumes the current UTC Daily session for the guest browser or verified Telegram player. Both Telegram login flows use the same current Daily for that player.
 - `POST /daily/guess` submits `{ "movieId": "Q25188", "gameId": "<session UUID>" }`. The session ID comes from `GET /daily`; missing or outdated identity is rejected with `409 daily_expired`. For older clients, a quoted `If-Match` session ID is still accepted when `gameId` is absent. When both are present, `gameId` takes precedence. It returns the updated session.
 
 The session ID prevents a tab from submitting yesterday's guess into today's puzzle. A stale session ID returns `409 daily_expired`; a malformed JSON `gameId` returns `400 invalid_input`.
@@ -32,7 +43,7 @@ Dates use the calendar format `YYYY-MM-DD`. Archive moves require a session owne
 - `GET /challenges/{id}` creates or resumes this visitor's session for the challenge.
 - `POST /challenges/{id}/guess` submits `{ "movieId": "Q25188" }`.
 
-The link does not encode the film ID. Recipients have separate game progress.
+The website URL `/challenge/<UUID>` and Telegram payload `challenge_<UUID>` contain the same opaque challenge ID. Guest and signed-in progress is scoped to the client. Shared previews display generic CineClue metadata.
 
 ## Hints
 
@@ -59,16 +70,17 @@ The server checks ownership on session reads and mutations. It does not accept c
 
 ## Request limits and errors
 
-Mutation bodies must be JSON objects no larger than 4096 bytes, without extra keys. Foreign `Origin` and `Sec-Fetch-Site: cross-site` POST requests are rejected. There is no wildcard CORS policy.
+Mutation bodies must be JSON objects without extra keys. The limit is 4096 bytes, or 8192 for the Mini App sign-in and resume endpoints. Foreign `Origin` and `Sec-Fetch-Site: cross-site` POST requests are rejected. There is no wildcard CORS policy.
 
 The shared database-backed limit allows 60 mutations per remote IP per minute. A rejected request returns `429 rate_limited` and `Retry-After: 60`. GET requests do not consume this quota. Netlify Functions use the platform-provided `context.ip`; client-supplied forwarding headers cannot choose the quota identity. See [deployment](DEPLOYMENT.md#proxy-identity-and-request-limits) for proxy identity and edge limits.
 
 Errors use `{ "error": "code" }`:
 - **400:** `invalid_input`, `invalid_json`.
+- **401:** `telegram_invalid`, `telegram_init_expired`.
 - **403:** `invalid_origin`.
 - **404:** `not_found`, `archive_unavailable`.
 - **405:** `method_not_allowed`.
-- **409:** `daily_expired`, `already_guessed`, `game_finished`, `hints_locked`, `hint_used`.
+- **409:** `daily_expired`, `already_guessed`, `game_finished`, `hints_locked`, `hint_used`, `session_changed`.
 - **413:** `body_too_large`.
 - **415:** `json_required`.
 - **422:** `unknown_movie`, `no_candidates`, `hint_unavailable`.

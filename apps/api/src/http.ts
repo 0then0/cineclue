@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { isIP } from "node:net";
@@ -10,6 +9,8 @@ import type { Catalog } from "./catalog.ts";
 import { pool } from "./db.ts";
 import { ApiError, Games } from "./game.ts";
 import { MediaCatalog } from "./media.ts";
+import { guestSession, guestVisitor, localGameOwner, TelegramSessions } from "./sessions.ts";
+import type { TelegramConfig } from "./telegram.ts";
 
 const uuid = z.uuid();
 const hintBody = z.object({ kind: z.enum(hintKinds) }).strict();
@@ -19,13 +20,15 @@ const archiveDate = z.iso.date().refine((date) => !date.startsWith("0000"));
 const archiveOpenBody = z.strictObject({});
 const archiveGuessBody = guessBody.extend({ gameId: uuid });
 const archiveHintBody = hintBody.extend({ gameId: uuid });
+const oidcStartBody = z.strictObject({ returnTo: z.string().max(128) });
+const miniAppBody = z.strictObject({ initData: z.string().min(1).max(8192) });
 const unlimitedBody = z
   .object({
     difficulty: z.enum(["easy", "normal", "hard"]).default("normal"),
     pack: z.string().max(80).default("popular"),
   })
   .strict();
-async function body(req: Request) {
+async function body(req: Request, limit = 4096) {
   if (!req.headers.get("content-type")?.startsWith("application/json"))
     throw new ApiError(415, "json_required");
   const chunks: Buffer[] = [];
@@ -33,7 +36,7 @@ async function body(req: Request) {
   if (!req.body) throw new ApiError(400, "invalid_json");
   for await (const chunk of req.body) {
     size += chunk.length;
-    if (size > 4096) throw new ApiError(413, "body_too_large");
+    if (size > limit) throw new ApiError(413, "body_too_large");
     chunks.push(Buffer.from(chunk));
   }
   try {
@@ -59,10 +62,12 @@ export function createHandler(
     secureCookies?: boolean;
     staticRoot?: string;
     rateLimit?: number;
+    telegram?: TelegramConfig;
   } = {},
 ) {
   const games = new Games(catalog, secret);
   const media = new MediaCatalog(catalog, undefined, options.media);
+  const telegram = options.telegram ? new TelegramSessions(options.telegram) : null;
   return async (req: Request, clientIp: string): Promise<Response> => {
     const headers = new Headers();
     headers.set("X-Content-Type-Options", "nosniff");
@@ -70,7 +75,7 @@ export function createHandler(
     headers.set("X-Frame-Options", "DENY");
     headers.set(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org https://upload.wikimedia.org https://thumb.wikimedia.org; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+      "default-src 'self'; script-src 'self' https://telegram.org/js/telegram-web-app.js; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org https://upload.wikimedia.org https://thumb.wikimedia.org; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     );
     const send = (status: number, value: unknown) => {
       headers.set("Content-Type", "application/json; charset=utf-8");
@@ -129,59 +134,7 @@ export function createHandler(
           throw new ApiError(429, "rate_limited");
         }
       }
-      const cookie = req.headers
-        .get("cookie")
-        ?.split(";")
-        .map((s) => s.trim())
-        .find((s) => s.startsWith("cineclue_visitor="))
-        ?.slice(17);
-      const parsed = uuid.safeParse(cookie);
-      const visitor = parsed.success ? parsed.data : randomUUID();
-      if (!parsed.success)
-        headers.set(
-          "Set-Cookie",
-          `cineclue_visitor=${visitor}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000${options.secureCookies ? "; Secure" : ""}`,
-        );
-      if (method === "GET" && path === "/api/daily") {
-        return send(200, await games.daily(visitor));
-      }
-      if (method === "POST" && path === "/api/daily/guess") {
-        const b = dailyGuessBody.parse(await body(req));
-        const game = await games.daily(visitor);
-        // Prefer JSON identity: conditional headers may be consumed by hosting proxies.
-        // Retain If-Match for clients loaded before this deployment.
-        const matches =
-          b.gameId !== undefined
-            ? b.gameId === game.id
-            : req.headers.get("if-match") === `"${game.id}"`;
-        if (!matches) throw new ApiError(409, "daily_expired");
-        return send(200, await games.guess(game.id, visitor, b.movieId));
-      }
-      if (method === "GET" && path === "/api/archive") {
-        const before = archiveDate.optional().parse(url.searchParams.get("before") ?? undefined);
-        return send(200, await games.archiveDates(before));
-      }
-      const archiveRoute = path.match(/^\/api\/archive\/([^/]+)(?:\/(guess|hints))?$/);
-      if (method === "POST" && archiveRoute) {
-        const date = archiveDate.parse(archiveRoute[1]);
-        const input = await body(req);
-        if (archiveRoute[2] === "guess") {
-          const b = archiveGuessBody.parse(input);
-          return send(200, await games.guess(b.gameId, visitor, b.movieId, date));
-        }
-        if (archiveRoute[2] === "hints") {
-          const b = archiveHintBody.parse(input);
-          return send(200, await games.hint(b.gameId, visitor, b.kind, date));
-        }
-        archiveOpenBody.parse(input);
-        return send(200, await games.archive(date, visitor));
-      }
-      const hintRoute = path.match(/^\/api\/games\/([^/]+)\/hints$/);
-      if (method === "POST" && hintRoute) {
-        const id = uuid.parse(hintRoute[1]);
-        const b = hintBody.parse(await body(req));
-        return send(200, await games.hint(id, visitor, b.kind));
-      }
+      const guest = guestVisitor(req, headers, Boolean(telegram || options.secureCookies));
       if (method === "GET" && path === "/api/movies/search") {
         const q = z
           .string()
@@ -214,6 +167,86 @@ export function createHandler(
           catalogSize: catalog.movies.length,
           dataSources: catalog.sources,
         });
+      }
+      if (telegram && method === "GET" && path === "/api/auth/telegram/callback") {
+        return await telegram.callback(req, headers, guest, url);
+      }
+      const session = (await telegram?.read(req, guest)) ?? { player: null };
+      const { player } = session;
+      const expectedPlayer = req.headers.get("x-cineclue-player");
+      if (expectedPlayer !== null && expectedPlayer !== (player?.key ?? "guest")) {
+        throw new ApiError(409, "session_changed");
+      }
+      if (method === "GET" && path === "/api/session") {
+        return send(
+          200,
+          telegram ? { ...(await telegram.describe(player, guest)), ...session } : guestSession,
+        );
+      }
+      if (telegram && method === "POST") {
+        if (path === "/api/auth/telegram/start") {
+          const { returnTo } = oidcStartBody.parse(await body(req));
+          return send(200, await telegram.start(headers, guest, returnTo));
+        }
+        if (path === "/api/auth/telegram/mini-app") {
+          const { initData } = miniAppBody.parse(await body(req, 8192));
+          return send(200, await telegram.miniApp(headers, guest, initData));
+        }
+        if (path === "/api/auth/telegram/mini-app/resume") {
+          const { initData } = miniAppBody.parse(await body(req, 8192));
+          return send(200, await telegram.resumeMiniApp(req, guest, initData));
+        }
+        if (path === "/api/auth/logout") {
+          archiveOpenBody.parse(await body(req));
+          return send(
+            200,
+            player
+              ? await telegram.logout(req, headers, guest)
+              : await telegram.describe(null, guest),
+          );
+        }
+      }
+      const visitor = localGameOwner(guest, player?.key);
+      const dailyVisitor = player?.key ?? guest;
+      if (method === "GET" && path === "/api/daily") {
+        return send(200, await games.daily(dailyVisitor));
+      }
+      if (method === "POST" && path === "/api/daily/guess") {
+        const b = dailyGuessBody.parse(await body(req));
+        const game = await games.daily(dailyVisitor);
+        // Prefer JSON identity: conditional headers may be consumed by hosting proxies.
+        // Retain If-Match for clients loaded before this deployment.
+        const matches =
+          b.gameId !== undefined
+            ? b.gameId === game.id
+            : req.headers.get("if-match") === `"${game.id}"`;
+        if (!matches) throw new ApiError(409, "daily_expired");
+        return send(200, await games.guess(game.id, dailyVisitor, b.movieId));
+      }
+      if (method === "GET" && path === "/api/archive") {
+        const before = archiveDate.optional().parse(url.searchParams.get("before") ?? undefined);
+        return send(200, await games.archiveDates(before));
+      }
+      const archiveRoute = path.match(/^\/api\/archive\/([^/]+)(?:\/(guess|hints))?$/);
+      if (method === "POST" && archiveRoute) {
+        const date = archiveDate.parse(archiveRoute[1]);
+        const input = await body(req);
+        if (archiveRoute[2] === "guess") {
+          const b = archiveGuessBody.parse(input);
+          return send(200, await games.guess(b.gameId, visitor, b.movieId, date));
+        }
+        if (archiveRoute[2] === "hints") {
+          const b = archiveHintBody.parse(input);
+          return send(200, await games.hint(b.gameId, visitor, b.kind, date));
+        }
+        archiveOpenBody.parse(input);
+        return send(200, await games.archive(date, visitor));
+      }
+      const hintRoute = path.match(/^\/api\/games\/([^/]+)\/hints$/);
+      if (method === "POST" && hintRoute) {
+        const id = uuid.parse(hintRoute[1]);
+        const b = hintBody.parse(await body(req));
+        return send(200, await games.hint(id, visitor, b.kind, undefined, player?.key));
       }
       if (method === "POST" && path === "/api/challenges") {
         const b = guessBody.parse(await body(req));
@@ -296,7 +329,10 @@ export function app(
       if (req.method !== "GET" && req.method !== "HEAD")
         init.body = Readable.toWeb(req) as ReadableStream<Uint8Array>;
       const response = await handle(new Request(new URL(req.url ?? "/", "http://local"), init), ip);
-      res.writeHead(response.status, Object.fromEntries(response.headers));
+      const outgoing: Record<string, string | string[]> = Object.fromEntries(response.headers);
+      const cookies = response.headers.getSetCookie();
+      if (cookies.length) outgoing["set-cookie"] = cookies;
+      res.writeHead(response.status, outgoing);
       res.end(Buffer.from(await response.arrayBuffer()));
     } catch (error) {
       console.error(error);

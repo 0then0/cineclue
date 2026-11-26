@@ -2,6 +2,8 @@ import { loadCatalog } from "./catalog.ts";
 import { pool } from "./db.ts";
 import { app } from "./http.ts";
 import { readMediaSnapshot } from "./media.ts";
+import { cleanupTelegramSessions } from "./sessions.ts";
+import { telegramConfig } from "./telegram.ts";
 
 const secret = process.env.DAILY_SECRET;
 if (!secret || secret.length < 32)
@@ -9,15 +11,18 @@ if (!secret || secret.length < 32)
 const production = process.env.NODE_ENV === "production";
 if (production && !process.env.PUBLIC_ORIGIN?.startsWith("https://"))
   throw new Error("Production requires an HTTPS PUBLIC_ORIGIN");
+const origin = process.env.PUBLIC_ORIGIN ?? "http://localhost:5173";
 const server = app(await loadCatalog(), secret, {
   media: await readMediaSnapshot(),
-  origin: process.env.PUBLIC_ORIGIN ?? "http://localhost:5173",
+  origin,
   secureCookies: production,
   staticRoot: process.env.STATIC_ROOT,
   trustedProxyIp: process.env.TRUSTED_PROXY_IP,
+  telegram: telegramConfig(origin),
 });
 const cleanup = setInterval(() => {
   pool.query("DELETE FROM rate_limit WHERE expires_at<now()").catch(console.error);
+  cleanupTelegramSessions().catch(console.error);
 }, 60000);
 cleanup.unref();
 server.listen(Number(process.env.PORT ?? 3001), "0.0.0.0", () =>

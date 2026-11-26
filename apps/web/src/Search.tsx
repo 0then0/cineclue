@@ -7,12 +7,14 @@ export function Search({
   t,
   onSelect,
   disabled,
+  dismissKeyboard,
   excluded = [],
 }: {
   locale: Locale;
   t: Messages;
   onSelect: (m: PublicMovie) => Promise<void>;
   disabled?: boolean;
+  dismissKeyboard?: boolean;
   excluded?: string[];
 }) {
   const [query, setQuery] = useState("");
@@ -57,12 +59,18 @@ export function Search({
       controller.abort();
     };
   }, [query, excludeKey]);
+  useEffect(() => {
+    if (active >= 0 && open) {
+      document.getElementById(`${listId}-${active}`)?.scrollIntoView?.({ block: "nearest" });
+    }
+  }, [active, listId, open]);
   async function choose(m: PublicMovie) {
     setOpen(false);
     try {
       await onSelect(m);
       setQuery("");
-      input.current?.focus();
+      if (dismissKeyboard) input.current?.blur();
+      else input.current?.focus();
     } catch {
       setOpen(true);
     }
@@ -80,6 +88,8 @@ export function Search({
           ref={input}
           role="combobox"
           autoComplete="off"
+          inputMode="search"
+          enterKeyHint="search"
           aria-autocomplete="list"
           aria-expanded={open && query.trim().length >= 2}
           aria-controls={listId}

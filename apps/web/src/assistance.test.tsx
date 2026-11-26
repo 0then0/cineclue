@@ -314,11 +314,12 @@ it.each(["stats", "help"] as const)(
     );
     localStorage.setItem("cineclue:locale", JSON.stringify("en"));
     render(<App />);
+    if (kind === "stats") await screen.findByRole("combobox", { name: dictionaries.en.search });
     const trigger = within(screen.getByRole("banner")).getByRole("button", {
       name: dictionaries.en[kind],
     });
     fireEvent.click(trigger);
-    const dialog = screen.getByRole("dialog");
+    const dialog = screen.getByRole("dialog", { name: dictionaries.en[kind] });
     vi.spyOn(dialog, "getBoundingClientRect").mockReturnValue({
       left: 100,
       right: 500,
@@ -332,18 +333,18 @@ it.each(["stats", "help"] as const)(
     });
     fireEvent.pointerDown(dialog, { clientX: 110, clientY: 110 });
     fireEvent.click(dialog, { clientX: 110, clientY: 110 });
-    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect(screen.getByRole("dialog", { name: dictionaries.en[kind] })).toBe(dialog);
     const heading = within(dialog).getByRole("heading", { level: 2 });
     fireEvent.pointerDown(heading, { clientX: 150, clientY: 150 });
     fireEvent.click(heading, { clientX: 150, clientY: 150 });
-    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect(screen.getByRole("dialog", { name: dictionaries.en[kind] })).toBe(dialog);
     fireEvent.pointerDown(dialog, { clientX: 200, clientY: 200 });
     fireEvent.click(dialog, { clientX: 50, clientY: 50 });
-    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect(screen.getByRole("dialog", { name: dictionaries.en[kind] })).toBe(dialog);
     fireEvent.pointerDown(dialog, { clientX: 50, clientY: 50 });
     fireEvent.click(dialog, { clientX: 50, clientY: 50 });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("dialog", { name: dictionaries.en[kind] })).toBeNull();
     fireEvent.click(trigger);
-    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: dictionaries.en[kind] })).toBeTruthy();
   },
 );

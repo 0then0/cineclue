@@ -28,6 +28,7 @@ Guess a mystery film through its connections to other movies. Each attempt compa
 - **Languages:** English, Russian, Spanish, German, French, Japanese and Brazilian Portuguese. The interface and built-in genre/collection labels are translated; film titles and personal names use the translations available in the catalog.
 - **Unlimited:** random puzzles with three difficulty levels and 42 film collections.
 - **Challenge:** choose a film and send a shareable puzzle link to a friend.
+- **Telegram:** open the same game as a Mini App, or sign in with Telegram on the website when a bot is configured.
 - **10,000 films:** the catalog is included, so setup does not require a movie API key.
 - **Useful clues:** directional arrows, highlighted matches, portraits, posters and country flags.
 - **Hints:** unlock a clue after three misses and another after seven.
@@ -59,7 +60,9 @@ Search for a film by an available translated, original or alternative title and 
 
 After three and seven unsuccessful attempts, choose an available hint: genres, a cast member, the release decade or another film by the director. Closing the chooser does not spend a hint. The answer is revealed when you win or use all eight attempts.
 
-Daily progress is stored on the server and linked to an anonymous browser cookie. Statistics are stored in that browser's localStorage. Clearing cookies removes access to existing games; clearing localStorage removes local statistics. No account is required.
+Guests can play in the browser and in the Mini App. A browser cookie restores the guest game. Telegram sign-in opens the account's current UTC Daily on either entry point. If you already have a guest Daily, sign out to resume it in the original browser or Mini App. The two games keep their own guesses and hints.
+
+Completed Daily statistics, streaks and JSON history files are local to the browser or Mini App where you play. The signed-in Daily board for today can be resumed from either entry point. See the [one-bot setup and acceptance checks](docs/TELEGRAM.md).
 
 Open **Archive** to choose a past date. A Daily puzzle is saved when the first request asks for that day's game, so some dates may be missing. Each archive date has its own game, and the same browser cookie restores guesses, hints and completed results. Archive play is separate from Daily statistics, streaks and history exports. Browsers with Web Locks coordinate initial visitor setup across tabs. Without Web Locks, simultaneous first visits can create separate sessions until the cookie is set.
 
@@ -110,6 +113,7 @@ The repository includes a Netlify Functions API, a static Vite build and manual 
 - [HTTP API](docs/API.md): endpoints, sessions, errors and request limits.
 - [Data and media](docs/DATA.md): catalog sources, licensing, imports and image caching.
 - [Deployment](docs/DEPLOYMENT.md): configuration, backups, catalog updates and PostgreSQL upgrades.
+- [Telegram setup](docs/TELEGRAM.md) for the Main Mini App and website sign-in.
 - [Contributing](CONTRIBUTING.md), [security](SECURITY.md) and [code of conduct](CODE_OF_CONDUCT.md).
 - [Changelog](CHANGELOG.md): published releases and unreleased changes.
 

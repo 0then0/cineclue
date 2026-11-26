@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { Server } from "node:http";
 import { promisify } from "node:util";
@@ -13,6 +13,7 @@ import { selectDaily } from "../src/daily.ts";
 import { pool } from "../src/db.ts";
 import { Games, utcDate } from "../src/game.ts";
 import { app } from "../src/http.ts";
+import { idToken, initData, telegram, telegramJwk, testUserId } from "./telegram-fixtures.ts";
 
 const enabled = process.env.RUN_DB_TESTS === "1";
 describe.skipIf(!enabled)("API + disposable PostgreSQL", () => {
@@ -20,6 +21,13 @@ describe.skipIf(!enabled)("API + disposable PostgreSQL", () => {
   let base: string;
   let catalog: Catalog;
   const cookie = () => `cineclue_visitor=${randomUUID()}`;
+  function responseCookie(r: Response, name: string) {
+    const value = r.headers.getSetCookie().find((cookie) => cookie.startsWith(`${name}=`));
+    if (!value) throw new Error(`Missing ${name} cookie`);
+    expect(value).toContain("HttpOnly; SameSite=Lax; Path=/");
+    expect(value).toContain("; Secure");
+    return value.split(";")[0];
+  }
   async function request(
     path: string,
     visitor: string,
@@ -44,6 +52,7 @@ describe.skipIf(!enabled)("API + disposable PostgreSQL", () => {
     server = app(catalog, "test-secret-at-least-32-characters", {
       origin: "http://localhost:5173",
       rateLimit: 1000,
+      telegram,
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -911,5 +920,339 @@ describe.skipIf(!enabled)("API + disposable PostgreSQL", () => {
     } finally {
       await new Promise<void>((resolve) => limited.close(() => resolve()));
     }
+  });
+  it("shares the current Daily between verified website and Mini App logins, with the guest game intact", async () => {
+    const siteGuest = cookie();
+    const miniGuest = cookie();
+    const first = (await request("/daily", siteGuest)).data;
+    const { target_id } = (
+      await pool.query("SELECT target_id FROM game_session WHERE id=$1", [first.id])
+    ).rows[0];
+    const misses = catalog.movies.filter((movie) => movie.id !== target_id).slice(0, 4);
+    expect(
+      (await request("/daily/guess", siteGuest, { movieId: misses[0].id, gameId: first.id })).r
+        .status,
+    ).toBe(200);
+
+    const start = await request("/auth/telegram/start", siteGuest, { returnTo: "/" });
+    expect(start.r.status).toBe(200);
+    const attempt = responseCookie(start.r, "__Host-cineclue_login");
+    const auth = new URL(start.data.url);
+    expect(auth.origin + auth.pathname).toBe("https://oauth.telegram.org/auth");
+    expect(auth.searchParams.get("scope")).toBe("openid profile");
+    expect(auth.searchParams.get("redirect_uri")).toBe(telegram.redirectUri);
+    expect(auth.searchParams.get("code_challenge_method")).toBe("S256");
+    const state = auth.searchParams.get("state");
+    const nonce = auth.searchParams.get("nonce");
+    expect(state).toMatch(/^[\w-]{43}$/);
+    expect(nonce).toMatch(/^[\w-]{43}$/);
+    expect(state).not.toBe(nonce);
+
+    const originalFetch = fetch;
+    const tokenCalls = vi.fn((init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Basic ${Buffer.from(`${telegram.clientId}:${telegram.clientSecret}`).toString("base64")}`,
+      );
+      expect(init?.body).toBeInstanceOf(URLSearchParams);
+      const body = init?.body as URLSearchParams;
+      expect(body.get("code")).toBe("fixture-code");
+      expect(body.get("redirect_uri")).toBe(telegram.redirectUri);
+      expect(
+        createHash("sha256")
+          .update(body.get("code_verifier") ?? "")
+          .digest("base64url"),
+      ).toBe(auth.searchParams.get("code_challenge"));
+      return Response.json({ id_token: idToken({ nonce }) });
+    });
+    vi.stubGlobal("fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (input === "https://oauth.telegram.org/token") return tokenCalls(init);
+      if (input === "https://oauth.telegram.org/.well-known/jwks.json")
+        return Response.json({ keys: [telegramJwk] });
+      return originalFetch(input, init);
+    });
+
+    let siteSession: string;
+    const callbackUrl = `${base}/auth/telegram/callback?state=${state}&code=fixture-code`;
+    const callback = (guest: string) =>
+      fetch(callbackUrl, { redirect: "manual", headers: { cookie: `${guest}; ${attempt}` } });
+    try {
+      expect((await callback(miniGuest)).headers.get("location")).toBe("/?telegram=failed");
+      expect(tokenCalls).not.toHaveBeenCalled();
+      const callbacks = await Promise.all([callback(siteGuest), callback(siteGuest)]);
+      const accepted = callbacks.find((r) => r.headers.get("location") === "/?telegram=signed-in");
+      if (!accepted) throw new Error("Login failed");
+      expect(accepted.status).toBe(303);
+      expect(accepted.headers.get("cache-control")).toBe("no-store");
+      expect(callbacks.map((r) => r.headers.get("location")).sort()).toEqual([
+        "/?telegram=failed",
+        "/?telegram=signed-in",
+      ]);
+      expect(accepted.headers.getSetCookie()).toHaveLength(1);
+      siteSession = responseCookie(accepted, "__Host-cineclue_session");
+      expect(tokenCalls).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    const siteCookies = `${siteGuest}; ${siteSession}`;
+    const site = (await request("/session", siteCookies)).data;
+    expect(site.guestDaily).toBe(true);
+    const account = (await request("/daily", siteCookies)).data;
+    expect(account.id).not.toBe(first.id);
+    expect(account.guesses).toEqual([]);
+    await request("/daily/guess", siteCookies, { movieId: misses[1].id, gameId: account.id });
+    const mini = await request(
+      "/auth/telegram/mini-app",
+      miniGuest,
+      { initData: initData(testUserId) },
+      { "X-CineClue-Mini-App": "guest" },
+    );
+    expect(mini.r.status).toBe(200);
+    expect(mini.data.player.key).toBe(site.player.key);
+    const miniSession = responseCookie(mini.r, "__Host-cineclue_session");
+    const miniCookies = `${miniGuest}; ${miniSession}`;
+    const miniHeaders = {
+      "X-CineClue-Mini-App": mini.data.miniAppProof,
+      "X-CineClue-Player": site.player.key,
+    };
+    const resumed = (await request("/daily", miniCookies, undefined, miniHeaders)).data;
+    expect(resumed.id).toBe(account.id);
+    expect(resumed.guesses.map((guess: { movie: { id: string } }) => guess.movie.id)).toEqual([
+      misses[1].id,
+    ]);
+    await request(
+      "/daily/guess",
+      miniCookies,
+      { movieId: misses[2].id, gameId: account.id },
+      miniHeaders,
+    );
+    const third = await request("/daily/guess", siteCookies, {
+      movieId: misses[3].id,
+      gameId: account.id,
+    });
+    expect(third.data.guesses).toHaveLength(3);
+    const hint = await request(
+      `/games/${account.id}/hints`,
+      miniCookies,
+      { kind: "decade" },
+      miniHeaders,
+    );
+    expect(hint.data.hints.used).toHaveLength(1);
+    expect((await request("/daily", siteCookies)).data).toEqual(hint.data);
+
+    // A new WebView must prove the current Telegram account before it can reuse a stored cookie.
+    const launching = { "X-CineClue-Mini-App": "guest" };
+    expect((await request("/session", miniCookies, undefined, launching)).data).toMatchObject({
+      player: null,
+      resumeMiniApp: true,
+    });
+    expect((await request("/daily", miniCookies)).data.id).not.toBe(account.id);
+    const mismatch = await request(
+      "/auth/telegram/mini-app/resume",
+      miniCookies,
+      { initData: initData(testUserId + 1) },
+      launching,
+    );
+    expect(mismatch.data.player).toBeNull();
+    const same = await request(
+      "/auth/telegram/mini-app/resume",
+      miniCookies,
+      { initData: initData(testUserId) },
+      launching,
+    );
+    expect(same.data.player.key).toBe(site.player.key);
+    expect(same.data.miniAppProof).toBe(mini.data.miniAppProof);
+
+    const otherGuest = cookie();
+    const other = await request(
+      "/auth/telegram/mini-app",
+      otherGuest,
+      { initData: initData(testUserId + 1) },
+      launching,
+    );
+    expect(other.data.player.key).not.toBe(site.player.key);
+    const otherCookie = responseCookie(other.r, "__Host-cineclue_session");
+    const otherProof = { "X-CineClue-Mini-App": other.data.miniAppProof };
+    expect(
+      (await request("/session", `${miniGuest}; ${otherCookie}`, undefined, otherProof)).data
+        .player,
+    ).toBeNull();
+    const otherGame = (
+      await request("/daily", `${otherGuest}; ${otherCookie}`, undefined, otherProof)
+    ).data;
+    expect(otherGame.id).not.toBe(account.id);
+    expect(otherGame.guesses).toEqual([]);
+    const impersonation = await request(
+      "/daily",
+      `cineclue_visitor=${site.player.key}`,
+      undefined,
+      { "X-CineClue-Player": site.player.key },
+    );
+    expect(impersonation.data).toEqual({ error: "session_changed" });
+
+    const logout = await request(
+      "/auth/logout",
+      siteCookies,
+      {},
+      { "X-CineClue-Player": site.player.key },
+    );
+    expect(logout.data.player).toBeNull();
+    expect(logout.r.headers.getSetCookie()).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/__Host-cineclue_session=;.*Max-Age=0; Secure/),
+      ]),
+    );
+    const stale = await request("/daily", siteCookies, undefined, {
+      "X-CineClue-Player": site.player.key,
+    });
+    expect(stale.data).toEqual({ error: "session_changed" });
+    const guest = (await request("/daily", siteCookies)).data;
+    expect(guest.id).toBe(first.id);
+    expect(guest.guesses).toHaveLength(1);
+    expect((await request("/daily", miniCookies, undefined, miniHeaders)).data.id).toBe(account.id);
+  });
+
+  it("cannot finish a superseded OIDC exchange or restore a session after sign-out", async () => {
+    const visitor = cookie();
+    async function start() {
+      const { r, data } = await request("/auth/telegram/start", visitor, { returnTo: "/" });
+      expect(r.status).toBe(200);
+      return {
+        params: new URL(data.url).searchParams,
+        cookie: responseCookie(r, "__Host-cineclue_login"),
+      };
+    }
+    const originalFetch = fetch;
+    const exchangeStarted = Promise.withResolvers<void>();
+    const finishExchange = Promise.withResolvers<void>();
+    const first = await start();
+    let second: Awaited<ReturnType<typeof start>>;
+    vi.stubGlobal("fetch", async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (url === "https://oauth.telegram.org/.well-known/jwks.json") {
+        return Response.json({ keys: [telegramJwk] });
+      }
+      if (url === "https://oauth.telegram.org/token") {
+        if (!(init?.body instanceof URLSearchParams))
+          throw new Error("Missing token exchange form");
+        const code = init.body.get("code");
+        if (code === "first") {
+          exchangeStarted.resolve();
+          await finishExchange.promise;
+        }
+        const attempt = code === "first" ? first : second;
+        return Response.json({
+          id_token: idToken({
+            nonce: attempt.params.get("nonce"),
+            id: code === "first" ? testUserId : testUserId + 1,
+          }),
+        });
+      }
+      return originalFetch(url, init);
+    });
+    const callback = (attempt: Awaited<ReturnType<typeof start>>, code: string) =>
+      fetch(`${base}/auth/telegram/callback?state=${attempt.params.get("state")}&code=${code}`, {
+        redirect: "manual",
+        headers: { cookie: `${visitor}; ${attempt.cookie}` },
+      });
+    const delayed = callback(first, "first");
+    try {
+      await exchangeStarted.promise;
+      second = await start();
+      const latest = await callback(second, "latest");
+      expect(latest.headers.get("location")).toBe("/?telegram=signed-in");
+      const latestCookie = `${visitor}; ${responseCookie(latest, "__Host-cineclue_session")}`;
+      expect((await request("/session", latestCookie)).data.player).toBeTruthy();
+      expect((await request("/auth/logout", latestCookie, {})).data.player).toBeNull();
+      finishExchange.resolve();
+      const superseded = await delayed;
+      expect(superseded.headers.get("location")).toBe("/?telegram=failed");
+      expect(superseded.headers.getSetCookie()).toEqual([]);
+      expect((await request("/session", latestCookie)).data.player).toBeNull();
+    } finally {
+      finishExchange.resolve();
+      await delayed;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("handles cancellation, stale login state, and invalid signed launch without replacing guest access", async () => {
+    const visitor = cookie();
+    const start = async () => {
+      const result = await request("/auth/telegram/start", visitor, { returnTo: "/challenge" });
+      expect(result.r.status).toBe(200);
+      return {
+        state: new URL(result.data.url).searchParams.get("state") ?? "",
+        attempt: responseCookie(result.r, "__Host-cineclue_login"),
+      };
+    };
+    const callback = ({ state, attempt }: Awaited<ReturnType<typeof start>>) =>
+      fetch(`${base}/auth/telegram/callback?state=${state}&error=access_denied`, {
+        redirect: "manual",
+        headers: { cookie: `${visitor}; ${attempt}` },
+      });
+    const cancelled = await start();
+    expect((await callback(cancelled)).headers.get("location")).toBe(
+      "/challenge?telegram=cancelled",
+    );
+    expect((await callback(cancelled)).headers.get("location")).toBe("/?telegram=failed");
+    const expired = await start();
+    await pool.query(
+      "UPDATE telegram_login_attempt SET expires_at=now()-interval '1 second' WHERE state_hash=$1",
+      [createHash("sha256").update(expired.state).digest("hex")],
+    );
+    expect((await callback(expired)).headers.get("location")).toBe("/?telegram=failed");
+    const signed = initData(testUserId);
+    expect(
+      (await request("/auth/telegram/mini-app", visitor, { initData: `${signed}tampered` })).data,
+    ).toEqual({ error: "telegram_invalid" });
+    expect(
+      (
+        await request("/auth/telegram/mini-app", visitor, {
+          initData: initData(testUserId, Math.floor(Date.now() / 1000) - 601),
+        })
+      ).data,
+    ).toEqual({ error: "telegram_init_expired" });
+    expect((await request("/session", visitor)).data.player).toBeNull();
+    expect((await request("/daily", visitor)).r.status).toBe(200);
+  });
+
+  it("plays Challenge as guest and signed in, with scoped restoration and expiry", async () => {
+    const visitor = cookie();
+    const [target, wrong] = catalog.movies;
+    const created = await request("/challenges", visitor, { movieId: target.id });
+    const path = `/challenges/${created.data.id}`;
+    const guest = (await request(path, visitor)).data;
+    expect(
+      (await request(`${path}/guess`, visitor, { movieId: wrong.id })).data.guesses,
+    ).toHaveLength(1);
+    const login = await request("/auth/telegram/mini-app", visitor, {
+      initData: initData(testUserId + 2),
+    });
+    const session = responseCookie(login.r, "__Host-cineclue_session");
+    const signed = `${visitor}; ${session}`;
+    const headers = {
+      "X-CineClue-Mini-App": login.data.miniAppProof,
+      "X-CineClue-Player": login.data.player.key,
+    };
+    const account = (await request(path, signed, undefined, headers)).data;
+    expect(account.id).not.toBe(guest.id);
+    expect(account.guesses).toEqual([]);
+    expect(account).not.toHaveProperty("answer");
+    const win = (await request(`${path}/guess`, signed, { movieId: target.id }, headers)).data;
+    expect(win.status).toBe("won");
+    expect((await request(path, signed, undefined, headers)).data).toEqual(win);
+    await pool.query(
+      "UPDATE telegram_session SET expires_at=now()-interval '1 second' WHERE token_hash=$1",
+      [createHash("sha256").update(session.split("=")[1]).digest("hex")],
+    );
+    expect((await request(path, signed, undefined, headers)).data).toEqual({
+      error: "session_changed",
+    });
+    const restored = (await request(path, signed)).data;
+    expect(restored.id).toBe(guest.id);
+    expect(restored.guesses).toHaveLength(1);
+    expect((await request(`/challenges/${randomUUID()}`, visitor)).data).toEqual({
+      error: "not_found",
+    });
   });
 });

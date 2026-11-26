@@ -8,6 +8,7 @@ import {
   planHistoryImport,
   readHistoryFile,
   readStoredRecords,
+  recordsKey,
   serializeHistory,
 } from "./records.ts";
 import { type DailyRecord, dailyAttemptLimit, stats } from "./results.ts";
@@ -18,11 +19,13 @@ type Feedback = { role: "alert" | "status"; message: keyof Messages };
 export function StatsDialog({
   records,
   t,
+  storageKey = recordsKey,
   onImport,
   onClose,
 }: {
   records: DailyRecord[];
   t: Messages;
+  storageKey?: string;
   onImport: (records: DailyRecord[]) => void;
   onClose: () => void;
 }) {
@@ -76,7 +79,7 @@ export function StatsDialog({
       setFeedback({ role: "alert", message: result.error });
       return;
     }
-    const current = readStoredRecords();
+    const current = readStoredRecords(storageKey);
     if (!current) {
       setFeedback({ role: "alert", message: "localUnavailable" });
       return;
@@ -88,7 +91,7 @@ export function StatsDialog({
     if (!preview || busy) return;
     setFeedback(null);
     setBusy("saving");
-    const result = await applyHistoryImport(preview.incoming, preview.plan);
+    const result = await applyHistoryImport(preview.incoming, preview.plan, storageKey);
     setBusy(null);
     if (result.status === "unavailable") {
       setFeedback({ role: "alert", message: "localUnavailable" });

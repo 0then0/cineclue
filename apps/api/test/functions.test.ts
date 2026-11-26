@@ -137,5 +137,8 @@ it("runs scheduled cleanup without loading the game catalog or deleting game pro
   vi.spyOn(console, "log").mockImplementation(() => {});
   const query = vi.spyOn(pool, "query").mockResolvedValue({ rowCount: 2 } as never);
   await cleanup();
-  expect(query).toHaveBeenCalledExactlyOnceWith("DELETE FROM rate_limit WHERE expires_at<now()");
+  expect(query.mock.calls.map(([sql]) => sql)).toEqual([
+    "DELETE FROM rate_limit WHERE expires_at<now()",
+    "DELETE FROM telegram_login_attempt WHERE expires_at<=now(); DELETE FROM telegram_session WHERE expires_at<=now()",
+  ]);
 });

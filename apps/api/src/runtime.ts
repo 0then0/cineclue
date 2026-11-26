@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { loadCatalog } from "./catalog.ts";
 import { createHandler } from "./http.ts";
 import { readMediaSnapshot } from "./media.ts";
+import { telegramConfig } from "./telegram.ts";
 
 export async function initializeFunction() {
   const secret = process.env.DAILY_SECRET;
@@ -16,7 +17,12 @@ export async function initializeFunction() {
     loadCatalog(),
     readMediaSnapshot(resolve("data/media.json")),
   ]);
-  const handle = createHandler(catalog, secret, { media, origin, secureCookies: true });
+  const handle = createHandler(catalog, secret, {
+    media,
+    origin,
+    secureCookies: true,
+    telegram: telegramConfig(origin),
+  });
   console.log(
     JSON.stringify({
       event: "api_initialized",

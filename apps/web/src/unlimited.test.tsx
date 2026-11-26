@@ -39,7 +39,7 @@ function mockApi(saved: Record<string, GameView> = { first: game }) {
         ],
         catalogSize: 100,
       };
-    else if (url === "/api/movies/search?q=") body = { movies: [] };
+    else if (url === "/api/session") body = { telegramBot: null, player: null, guestDaily: false };
     else if (url === "/api/daily") body = { ...game, id: "daily", mode: "daily" };
     else if (url === "/api/unlimited" && init?.method === "POST") {
       count++;
@@ -252,7 +252,9 @@ it("opens the builder directly and after reload without loading or creating a ga
   expect(screen.getByRole("button", { name: "Challenge" }).getAttribute("aria-current")).toBe(
     "page",
   );
-  expect(api.fetch.mock.calls.every(([url]) => url === "/api/packs")).toBe(true);
+  expect(
+    api.fetch.mock.calls.every(([url]) => url === "/api/packs" || url === "/api/session"),
+  ).toBe(true);
 });
 it("restores the challenge builder through browser Back navigation", async () => {
   const api = mockApi();

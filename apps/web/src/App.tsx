@@ -12,8 +12,8 @@ import { Confetti } from "./Confetti.tsx";
 import { packName } from "./catalog-i18n.ts";
 import {
   api,
-  establishVisitor,
   HttpError,
+  type PlayerSession,
   publicRead,
   readStorage,
   writeStorage,
@@ -31,11 +31,20 @@ import {
   titleOf,
 } from "./i18n.ts";
 import { MediaCredits, MediaPicture, useMovieMedia } from "./Media.tsx";
+import { usePlayerSession } from "./player-session.ts";
 import { readRecords, readStoredRecords, recordsKey, saveRecord } from "./records.ts";
-import { type DailyRecord, shareText } from "./results.ts";
+import { shareText } from "./results.ts";
 import { Search } from "./Search.tsx";
 import { StatsDialog } from "./StatsDialog.tsx";
 import { Tips } from "./Tips.tsx";
+import {
+  invalidMiniAppChallenge,
+  isMiniApp,
+  miniAppHistoryState,
+  telegramGameLink,
+  telegramShareLink,
+  telegramWebApp,
+} from "./telegram.ts";
 import {
   readUnlimitedSession,
   saveUnlimitedSession,
@@ -77,6 +86,28 @@ function ChallengeMovie({ movie, locale, t }: { movie: PublicMovie; locale: Loca
 }
 
 export default function App() {
+  const player = usePlayerSession();
+  return (
+    <GameApp
+      key={player.session ? (player.session.player?.key ?? "guest") : "loading"}
+      {...player}
+    />
+  );
+}
+
+function GameApp({
+  session,
+  error: sessionError,
+  loginResult,
+  refresh,
+  update,
+}: ReturnType<typeof usePlayerSession>) {
+  const player = session?.player?.key;
+  const ready = session !== null;
+  const bridge = telegramWebApp();
+  const miniApp = isMiniApp();
+  const miniAppCredential = miniApp ? (session?.miniAppProof ?? "guest") : undefined;
+  const storageKey = player ? `${recordsKey}:${player}` : recordsKey;
   const [locale, setLocale] = useState<Locale>(() => {
     const saved = readStorage<unknown>("cineclue:locale", null);
     return isLocale(saved)
@@ -92,10 +123,10 @@ export default function App() {
   const activePath = useRef(path);
   const [game, setGame] = useState<GameView | null>(null);
   const [archivePage, setArchivePage] = useState<ArchivePage | null>(null);
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState(true);
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState("");
-  const [records, setRecords] = useState<DailyRecord[]>(readRecords);
+  const [records, setRecords] = useState(() => readRecords(storageKey));
   const [showHelp, setShowHelp] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const builder = path === "/challenge";
@@ -106,6 +137,11 @@ export default function App() {
     movie: PublicMovie;
   } | null>(null);
   const challengeUrl = createdChallenge?.url ?? "";
+  const challengeLink =
+    createdChallenge && session?.telegramBot
+      ? telegramGameLink(session.telegramBot, new URL(createdChallenge.url).pathname)
+      : null;
+  const displayChallengeLink = (miniApp && challengeLink) || challengeUrl;
   const [packs, setPacks] = useState<Pack[]>([]);
   const [tmdbData, setTmdbData] = useState(false);
   const [catalogSize, setCatalogSize] = useState<number | null>(null);
@@ -113,40 +149,52 @@ export default function App() {
   const [difficulty, setDifficulty] = useState<Difficulty>("normal");
   const [now, setNow] = useState(Date.now());
   const [fallbackShare, setFallbackShare] = useState("");
+  const [authPending, setAuthPending] = useState(false);
+  const [authMessage, setAuthMessage] = useState<keyof Messages | null>(
+    loginResult === "cancelled"
+      ? "telegram_cancelled"
+      : loginResult === "failed"
+        ? "telegram_invalid"
+        : null,
+  );
   const t = dictionaries[locale];
   const requestId = useRef(0);
-  const visitor = useRef<Promise<void> | null>(null);
-  const ensureVisitor = useCallback(() => {
-    visitor.current ??= establishVisitor().catch((error) => {
-      visitor.current = null;
-      throw error;
-    });
-    return visitor.current;
-  }, []);
-  const persistDailyResult = useCallback((value: GameView, id: number) => {
-    if (value.mode !== "daily" || value.status === "playing" || !value.date) return;
-    const record = {
-      date: value.date,
-      won: value.status === "won",
-      attempts: value.guesses.length,
-    };
-    void saveRecord(record).then((result) => {
-      if (result.saved) setRecords(result.records);
-      else if (id === requestId.current) setNotice("localUnavailable");
-    });
-  }, []);
-  const unlimitedSession = useRef<UnlimitedSession | null>(readUnlimitedSession());
+  const gameApi = useCallback(
+    <T,>(endpoint: string, body?: unknown) =>
+      api<T>(endpoint, body, { player: player ?? "guest", miniApp: miniAppCredential }).catch(
+        (error) => {
+          if (error instanceof HttpError && error.code === "session_changed") refresh(true);
+          throw error;
+        },
+      ),
+    [miniAppCredential, player, refresh],
+  );
+  const persistDailyResult = useCallback(
+    (value: GameView, id: number) => {
+      if (value.mode !== "daily" || value.status === "playing" || !value.date) return;
+      const record = {
+        date: value.date,
+        won: value.status === "won",
+        attempts: value.guesses.length,
+      };
+      void saveRecord(record, storageKey).then((result) => {
+        if (result.saved) setRecords(result.records);
+        else if (id === requestId.current) setNotice("localUnavailable");
+      });
+    },
+    [storageKey],
+  );
+  const unlimitedSession = useRef<UnlimitedSession | null>(readUnlimitedSession(player));
   const startingUnlimited = useRef<Promise<GameView> | null>(null);
   const startUnlimited = useCallback(
     (difficulty: Difficulty, pack: string) => {
       // StrictMode and repeated loads must share a single session-creation request.
       if (!startingUnlimited.current) {
-        startingUnlimited.current = ensureVisitor()
-          .then(() => api<GameView>("/unlimited", { difficulty, pack }))
+        startingUnlimited.current = gameApi<GameView>("/unlimited", { difficulty, pack })
           .then((value) => {
             const saved = { id: value.id, pack };
             unlimitedSession.current = saved;
-            saveUnlimitedSession(saved);
+            saveUnlimitedSession(saved, player);
             return value;
           })
           .finally(() => {
@@ -155,7 +203,7 @@ export default function App() {
       }
       return startingUnlimited.current;
     },
-    [ensureVisitor],
+    [gameApi, player],
   );
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -190,14 +238,25 @@ export default function App() {
   const navigate = useCallback(
     (url: string) => {
       if (url === activePath.current) return;
-      if (url.startsWith("/archive") || activePath.current.startsWith("/archive")) {
+      if (bridge || url.startsWith("/archive") || activePath.current.startsWith("/archive")) {
         document.documentElement.scrollTop = 0;
       }
-      window.history.pushState({}, "", url);
+      window.history.pushState(miniAppHistoryState(), "", url);
       changePath(url);
     },
-    [changePath],
+    [bridge, changePath],
   );
+  useEffect(() => {
+    const back = bridge?.BackButton;
+    if (!back || path === "/") return;
+    const returnToDaily = () => navigate("/");
+    back.show();
+    back.onClick(returnToDaily);
+    return () => {
+      back.offClick(returnToDaily);
+      back.hide();
+    };
+  }, [bridge, navigate, path]);
   function followRoute(event: MouseEvent<HTMLAnchorElement>) {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault();
@@ -205,6 +264,7 @@ export default function App() {
   }
   const load = useCallback(
     async (before?: string) => {
+      if (!ready) return;
       const id = ++requestId.current;
       setPending(true);
       setError(null);
@@ -214,10 +274,11 @@ export default function App() {
         return;
       }
       try {
-        await ensureVisitor();
-        if (id !== requestId.current) return;
+        if (path === invalidMiniAppChallenge) throw new HttpError("challenge_unavailable");
         if (archiveList) {
-          const page = await api<ArchivePage>(before ? `/archive?before=${before}` : "/archive");
+          const page = await gameApi<ArchivePage>(
+            before ? `/archive?before=${before}` : "/archive",
+          );
           if (id === requestId.current) {
             setArchivePage((current) => ({
               ...page,
@@ -229,21 +290,21 @@ export default function App() {
         const legacyUnlimited = path.startsWith("/unlimited/");
         let value: GameView;
         if (isArchive) {
-          value = await api<GameView>(path, {});
+          value = await gameApi<GameView>(path, {});
         } else if (path === "/unlimited") {
           const active = unlimitedSession.current;
           if (active) {
             try {
-              value = await api<GameView>(`/unlimited/${encodeURIComponent(active.id)}`);
+              value = await gameApi<GameView>(`/unlimited/${encodeURIComponent(active.id)}`);
             } catch (e) {
               if (id !== requestId.current) return;
               if (!(e instanceof HttpError) || e.code !== "not_found") throw e;
               const replacement = unlimitedSession.current;
               if (replacement && replacement.id !== active.id) {
-                value = await api<GameView>(`/unlimited/${encodeURIComponent(replacement.id)}`);
+                value = await gameApi<GameView>(`/unlimited/${encodeURIComponent(replacement.id)}`);
               } else {
                 unlimitedSession.current = null;
-                saveUnlimitedSession(null);
+                saveUnlimitedSession(null, player);
                 value = await startUnlimited("normal", active.pack);
               }
             }
@@ -256,19 +317,20 @@ export default function App() {
             : legacyUnlimited
               ? path
               : "/daily";
-          value = await api<GameView>(endpoint);
+          value = await gameApi<GameView>(endpoint);
         }
-        persistDailyResult(value, id);
         if (id === requestId.current) {
+          // A completed board fetched from another client stays out of local statistics.
+          if (!player) persistDailyResult(value, id);
           if (value.mode === "unlimited") {
             const active = unlimitedSession.current;
             const saved = { id: value.id, pack: active?.id === value.id ? active.pack : "popular" };
             unlimitedSession.current = saved;
-            saveUnlimitedSession(saved);
+            saveUnlimitedSession(saved, player);
             setDifficulty(value.difficulty);
             setPack(saved.pack);
             if (legacyUnlimited) {
-              window.history.replaceState({}, "", "/unlimited");
+              window.history.replaceState(miniAppHistoryState(), "", "/unlimited");
               changePath("/unlimited");
               return;
             }
@@ -276,12 +338,28 @@ export default function App() {
           setGame(value);
         }
       } catch (e) {
-        if (id === requestId.current) setError(e);
+        if (id === requestId.current) {
+          const missingChallenge =
+            path.startsWith("/challenge/") &&
+            e instanceof HttpError &&
+            (e.code === "not_found" || e.code === "invalid_input");
+          setError(missingChallenge ? new HttpError("challenge_unavailable") : e);
+        }
       } finally {
         if (id === requestId.current) setPending(false);
       }
     },
-    [archiveList, changePath, ensureVisitor, isArchive, path, persistDailyResult, startUnlimited],
+    [
+      archiveList,
+      changePath,
+      gameApi,
+      isArchive,
+      path,
+      persistDailyResult,
+      player,
+      ready,
+      startUnlimited,
+    ],
   );
   useEffect(() => {
     void load();
@@ -289,6 +367,18 @@ export default function App() {
       requestId.current++;
     };
   }, [load]);
+  useEffect(() => {
+    if (!player || pending || path !== "/") return;
+    const resume = () => {
+      if (!document.hidden) void load();
+    };
+    document.addEventListener("visibilitychange", resume);
+    bridge?.onEvent?.("activated", resume);
+    return () => {
+      document.removeEventListener("visibilitychange", resume);
+      bridge?.offEvent?.("activated", resume);
+    };
+  }, [bridge, load, path, pending, player]);
   useEffect(() => {
     const controller = new AbortController();
     publicRead<CatalogInfo>("/packs", controller.signal)
@@ -318,15 +408,15 @@ export default function App() {
   }, [game, now, load, pending]);
   useEffect(() => {
     const sync = (event: StorageEvent) => {
-      if (event.key !== recordsKey && event.key !== null) return;
-      const latest = readStoredRecords();
+      if (event.key !== storageKey && event.key !== null) return;
+      const latest = readStoredRecords(storageKey);
       if (latest) setRecords(latest);
     };
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
-  }, []);
+  }, [storageKey]);
   async function guess(movie: PublicMovie) {
-    if (!game || pending) return;
+    if (!game || pending || authPending) return;
     setPending(true);
     setError(null);
     const id = requestId.current;
@@ -337,7 +427,7 @@ export default function App() {
       unlimited: `/unlimited/${game.id}/guess`,
     }[game.mode];
     try {
-      const value = await api<GameView>(endpoint, {
+      const value = await gameApi<GameView>(endpoint, {
         movieId: movie.id,
         ...(game.mode === "daily" || game.mode === "archive" ? { gameId: game.id } : {}),
       });
@@ -354,14 +444,14 @@ export default function App() {
     }
   }
   async function useHint(kind: HintKind) {
-    if (!game || pending) return;
+    if (!game || pending || authPending) return;
     const id = requestId.current;
     setPending(true);
     try {
       const value =
         game.mode === "archive"
-          ? await api<GameView>(`/archive/${game.date}/hints`, { kind, gameId: game.id })
-          : await api<GameView>(`/games/${game.id}/hints`, { kind });
+          ? await gameApi<GameView>(`/archive/${game.date}/hints`, { kind, gameId: game.id })
+          : await gameApi<GameView>(`/games/${game.id}/hints`, { kind });
       if (id === requestId.current) setGame(value);
     } finally {
       if (id === requestId.current) setPending(false);
@@ -376,7 +466,7 @@ export default function App() {
       if (id === requestId.current) {
         const saved = { id: value.id, pack };
         unlimitedSession.current = saved;
-        saveUnlimitedSession(saved);
+        saveUnlimitedSession(saved, player);
         setGame(value);
         setNotice("");
         setFallbackShare("");
@@ -393,9 +483,7 @@ export default function App() {
     setError(null);
     const id = requestId.current;
     try {
-      await ensureVisitor();
-      if (id !== requestId.current) return;
-      const value = await api<{ path: string }>("/challenges", { movieId: movie.id });
+      const value = await gameApi<{ path: string }>("/challenges", { movieId: movie.id });
       if (id === requestId.current) {
         setCreatedChallenge({ url: `${window.location.origin}${value.path}`, movie });
       }
@@ -411,6 +499,20 @@ export default function App() {
     const id = requestId.current;
     const text = shareText(game, t);
     try {
+      if (bridge?.openTelegramLink && session?.telegramBot) {
+        try {
+          const url =
+            game.mode === "challenge"
+              ? telegramGameLink(session.telegramBot, path)
+              : game.mode === "daily"
+                ? telegramGameLink(session.telegramBot, "/")
+                : `${window.location.origin}${path}`;
+          bridge.openTelegramLink(telegramShareLink(url, text));
+          return;
+        } catch {
+          // Use the system share sheet or clipboard if the native bridge is unavailable.
+        }
+      }
       if (navigator.share) {
         try {
           await navigator.share({ text });
@@ -431,11 +533,41 @@ export default function App() {
   }
   async function copyChallenge() {
     try {
-      await navigator.clipboard.writeText(challengeUrl);
+      await navigator.clipboard.writeText(displayChallengeLink);
       setNotice("copied");
     } catch {
       setNotice("shareUnavailable");
     }
+  }
+  async function changeSession() {
+    setAuthPending(true);
+    setAuthMessage(null);
+    setShowStats(false);
+    try {
+      if (player) {
+        update(await gameApi<PlayerSession>("/auth/logout", {}));
+      } else if (miniApp) {
+        if (!bridge?.initData) throw new HttpError("telegram_open_app");
+        update(
+          await gameApi<PlayerSession>("/auth/telegram/mini-app", { initData: bridge.initData }),
+        );
+      } else {
+        const { url } = await gameApi<{ url: string }>("/auth/telegram/start", { returnTo: path });
+        setAuthPending(false);
+        window.location.assign(url);
+        return;
+      }
+    } catch (e) {
+      setAuthMessage(
+        e instanceof HttpError &&
+          (e.code === "telegram_init_expired" || e.code === "telegram_open_app")
+          ? e.code
+          : player
+            ? "telegram_logout_failed"
+            : "telegram_invalid",
+      );
+    }
+    setAuthPending(false);
   }
   const seconds = Math.max(
     0,
@@ -446,7 +578,7 @@ export default function App() {
     .join(":");
   const mode = isArchive
     ? "archive"
-    : builder || path.startsWith("/challenge/")
+    : builder || path.startsWith("/challenge/") || path === invalidMiniAppChallenge
       ? "challenge"
       : path === "/unlimited" || path.startsWith("/unlimited/")
         ? "unlimited"
@@ -458,6 +590,9 @@ export default function App() {
     timeZone: "UTC",
   });
   const formatDate = (date: string) => dateFormat.format(new Date(`${date}T00:00:00Z`));
+  const unavailableChallenge = error instanceof HttpError && error.code === "challenge_unavailable";
+  const displayError = sessionError ?? error;
+  const busy = !ready || pending || authPending;
   return (
     <>
       <header className="site-header">
@@ -494,7 +629,7 @@ export default function App() {
             onClick={() => {
               if (path !== "/unlimited" || builder) navigate("/unlimited");
             }}
-            disabled={pending}
+            disabled={busy}
           >
             {t.unlimited}
           </button>
@@ -507,7 +642,7 @@ export default function App() {
               setError(null);
               setNotice("");
             }}
-            disabled={pending}
+            disabled={busy}
           >
             {t.challenge}
           </button>
@@ -534,6 +669,7 @@ export default function App() {
             type="button"
             className="utility-button"
             onClick={() => setShowStats(true)}
+            disabled={!ready || authPending}
             aria-label={t.stats}
             title={t.stats}
           >
@@ -600,7 +736,30 @@ export default function App() {
           </div>
           {!archiveList && <FilmShelf label={t.posterArt} locale={locale} />}
         </section>
-        <section className="game-panel" aria-busy={pending}>
+        {session?.telegramBot && (
+          <div className="telegram-account">
+            <div className="telegram-account-copy">
+              {player && <strong>{t.telegram_signed_in}</strong>}
+              <p>{t.telegram_daily_note}</p>
+              {player && mode === "daily" && session.guestDaily && (
+                <p role="status">{t.telegram_guest_daily}</p>
+              )}
+              {authMessage && (
+                <p role={authMessage === "telegram_cancelled" ? "status" : "alert"}>
+                  {t[authMessage]}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              disabled={busy && !sessionError}
+              onClick={() => void changeSession()}
+            >
+              {player ? t.telegram_sign_out : miniApp ? t.telegram_continue : t.telegram_sign_in}
+            </button>
+          </div>
+        )}
+        <section className="game-panel" aria-busy={busy && !sessionError}>
           {archiveList ? (
             archivePage ? (
               <div className="archive-puzzles">
@@ -631,7 +790,8 @@ export default function App() {
                 )}
               </div>
             ) : (
-              pending && (
+              pending &&
+              !sessionError && (
                 <p className="loading" role="status">
                   {t.loading}
                 </p>
@@ -653,13 +813,32 @@ export default function App() {
                   <input
                     id="challenge-link"
                     readOnly
-                    value={challengeUrl}
+                    value={displayChallengeLink}
                     onFocus={(e) => e.target.select()}
                   />
                   <div className="button-row">
                     <button type="button" className="primary" onClick={() => void copyChallenge()}>
                       {t.copy}
                     </button>
+                    {challengeLink && (
+                      <a
+                        className="telegram-share"
+                        href={telegramShareLink(challengeLink, "")}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(event) => {
+                          if (!bridge?.openTelegramLink) return;
+                          try {
+                            bridge.openTelegramLink(event.currentTarget.href);
+                            event.preventDefault();
+                          } catch {
+                            // Follow the link if the native client cannot open the chooser.
+                          }
+                        }}
+                      >
+                        {t.telegram_share}
+                      </a>
+                    )}
                     <button type="button" onClick={() => setCreatedChallenge(null)}>
                       {t.createAnother}
                     </button>
@@ -667,7 +846,13 @@ export default function App() {
                 </div>
               ) : (
                 <div className="search-area">
-                  <Search locale={locale} t={t} disabled={pending} onSelect={createChallenge} />
+                  <Search
+                    locale={locale}
+                    t={t}
+                    disabled={busy}
+                    dismissKeyboard={Boolean(bridge)}
+                    onSelect={createChallenge}
+                  />
                 </div>
               )}
             </>
@@ -686,7 +871,7 @@ export default function App() {
                   {game ? `${game.guesses.length} / ${game.maxAttempts}` : "— / 8"}
                 </span>
               </div>
-              {isArchive && (
+              {(isArchive || mode === "challenge") && (
                 <div className="archive-return">
                   <a href="/" onClick={followRoute}>
                     {t.backToDaily}
@@ -743,12 +928,12 @@ export default function App() {
                       ))}
                     </select>
                   </label>
-                  <button type="button" disabled={pending} onClick={() => void newUnlimited()}>
+                  <button type="button" disabled={busy} onClick={() => void newUnlimited()}>
                     {t.newGame} ↗
                   </button>
                 </div>
               )}
-              {!game && pending && (
+              {!game && pending && !sessionError && (
                 <p className="loading" role="status">
                   {t.loading}
                 </p>
@@ -778,7 +963,8 @@ export default function App() {
                       <Search
                         locale={locale}
                         t={t}
-                        disabled={pending}
+                        disabled={busy}
+                        dismissKeyboard={Boolean(bridge)}
                         excluded={game.guesses.map((g) => g.movie.id)}
                         onSelect={guess}
                       />
@@ -802,7 +988,7 @@ export default function App() {
                         </button>
                         <button
                           type="button"
-                          disabled={pending}
+                          disabled={busy}
                           onClick={() => (isArchive ? navigate("/archive") : void newUnlimited())}
                         >
                           {isArchive ? t.archive : t.next}
@@ -815,7 +1001,7 @@ export default function App() {
                     game={game}
                     locale={locale}
                     t={t}
-                    pending={pending}
+                    pending={busy}
                     onUse={useHint}
                   />
                   <Clues game={game} locale={locale} t={t} />
@@ -823,16 +1009,20 @@ export default function App() {
               )}
             </>
           )}
-          {error !== null && (
+          {displayError !== null && (
             <div className="error" role="alert">
-              <p>{errorMessage(error, t)}</p>
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => void load(archivePage?.nextBefore ?? undefined)}
-              >
-                {t.retry}
-              </button>
+              <p>{errorMessage(displayError, t)}</p>
+              {!unavailableChallenge && (
+                <button
+                  type="button"
+                  disabled={pending && !sessionError}
+                  onClick={() =>
+                    sessionError ? refresh() : void load(archivePage?.nextBefore ?? undefined)
+                  }
+                >
+                  {t.retry}
+                </button>
+              )}
             </div>
           )}
           {notice && (
@@ -877,6 +1067,7 @@ export default function App() {
         <StatsDialog
           records={records}
           t={t}
+          storageKey={storageKey}
           onImport={setRecords}
           onClose={() => setShowStats(false)}
         />

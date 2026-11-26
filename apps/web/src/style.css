@@ -1167,6 +1167,7 @@ footer {
     grid-template-columns: repeat(3, 1fr);
   }
 }
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *:before,
@@ -2508,6 +2509,91 @@ footer .catalog-credit {
     padding-inline: 3px;
   }
   .mode-nav .live-dot {
+    display: none;
+  }
+}
+
+.telegram-account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding: 12px 0;
+  margin-bottom: 12px;
+  border-top: 1px solid var(--line);
+}
+.telegram-account-copy {
+  flex: 1 1 260px;
+}
+.telegram-account p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.telegram-account strong + p,
+.telegram-account p + p {
+  margin-top: 4px;
+}
+.telegram-account [role="alert"] {
+  color: var(--ink);
+}
+.telegram-share {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  text-underline-offset: 3px;
+}
+[data-telegram-mini-app] body {
+  min-height: var(--tg-viewport-stable-height, 100dvh);
+  padding-top: max(
+    env(safe-area-inset-top),
+    calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px))
+  );
+  padding-right: max(
+    env(safe-area-inset-right),
+    calc(var(--tg-safe-area-inset-right, 0px) + var(--tg-content-safe-area-inset-right, 0px))
+  );
+  padding-bottom: max(
+    env(safe-area-inset-bottom),
+    calc(var(--tg-safe-area-inset-bottom, 0px) + var(--tg-content-safe-area-inset-bottom, 0px))
+  );
+  padding-left: max(
+    env(safe-area-inset-left),
+    calc(var(--tg-safe-area-inset-left, 0px) + var(--tg-content-safe-area-inset-left, 0px))
+  );
+}
+[data-telegram-mini-app] .site-header {
+  position: static;
+}
+[data-telegram-mini-app] .search-field input {
+  font-size: 16px;
+  scroll-margin-top: 12px;
+}
+[data-telegram-mini-app] .suggestions {
+  position: relative;
+  top: auto;
+  margin-top: 8px;
+  max-height: clamp(80px, calc(var(--cineclue-visual-height, 100dvh) * 0.45), 240px);
+  overscroll-behavior: contain;
+}
+[data-telegram-mini-app] .stats-dialog {
+  max-height: min(85dvh, calc(var(--cineclue-visual-height, 100dvh) - 32px));
+}
+@media (max-width: 540px) {
+  [data-telegram-mini-app] .site-header {
+    padding-inline: 12px;
+  }
+  [data-telegram-mini-app] .intro {
+    padding-block: 16px;
+    margin-bottom: 0;
+    min-height: auto;
+  }
+  [data-telegram-mini-app] .intro h1 {
+    font-size: clamp(24px, 7vw, 38px);
+  }
+  [data-telegram-mini-app] .intro .film-shelf {
     display: none;
   }
 }

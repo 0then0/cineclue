@@ -1,9 +1,9 @@
 export type UnlimitedSession = { id: string; pack: string };
-const key = "cineclue:unlimited:v1";
+const storageKey = (player?: string) => `cineclue:unlimited:v1${player ? `:${player}` : ""}`;
 
-export function readUnlimitedSession(): UnlimitedSession | null {
+export function readUnlimitedSession(player?: string): UnlimitedSession | null {
   try {
-    const value: unknown = JSON.parse(sessionStorage.getItem(key) ?? "null");
+    const value: unknown = JSON.parse(sessionStorage.getItem(storageKey(player)) ?? "null");
     if (
       value &&
       typeof value === "object" &&
@@ -19,10 +19,10 @@ export function readUnlimitedSession(): UnlimitedSession | null {
   }
   return null;
 }
-export function saveUnlimitedSession(value: UnlimitedSession | null) {
+export function saveUnlimitedSession(value: UnlimitedSession | null, player?: string) {
   try {
-    if (value) sessionStorage.setItem(key, JSON.stringify(value));
-    else sessionStorage.removeItem(key);
+    if (value) sessionStorage.setItem(storageKey(player), JSON.stringify(value));
+    else sessionStorage.removeItem(storageKey(player));
   } catch {
     // The App keeps an in-memory copy for navigation in this tab.
   }

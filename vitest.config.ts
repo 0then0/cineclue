@@ -10,6 +10,7 @@ export default defineConfig({
             "packages/**/*.test.ts",
             "apps/api/test/unit.test.ts",
             "apps/api/test/functions.test.ts",
+            "apps/api/test/telegram.test.ts",
             "scripts/**/*.test.ts",
           ],
         },

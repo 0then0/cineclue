@@ -11,7 +11,7 @@ packages/game-engine/     Domain models, comparisons, search and difficulty scor
 data/                     Versioned catalog, source seed, collections and JSON Schema
 scripts/import_movies/    Provider adapters, catalog generation and database seeding
 scripts/validate_dataset/ Catalog and collection validation
-netlify/functions/        HTTP function entry point and scheduled rate-counter cleanup
+netlify/functions/        HTTP function entry point and scheduled expiry cleanup
 docker/                   Container image and startup script
 docs/                     API, data and deployment guides
 ```
@@ -42,9 +42,11 @@ Sessions, Daily assignments, challenges, comparisons and redeemed hints are stor
 
 An HttpOnly cookie identifies an anonymous visitor. The browser stores language, theme, Daily statistics and cached image metadata in localStorage. Cooperating tabs serialize statistics writes with Web Locks where available and merge the latest stored records before writing.
 
+Both Telegram flows create a CineClue session. PostgreSQL stores one current token hash and expiry per browser visitor and revokes the session on sign-out. The verified Telegram user ID and bot identify the current Daily owner. Challenge, Archive and Unlimited use client-scoped ownership for signed-in players. Each player has separate local history. The client saves a signed-in Daily completion when it receives the result of the finishing guess.
+
 ## Runtime boundaries
 
-The API loads and validates the catalog at startup. Netlify initializes it lazily once per warm instance; concurrent first requests share the initialization promise and failed initialization is retried by a later request. The same Fetch handler serves Node and Functions, preserving interactive PostgreSQL transactions. Netlify client identity comes only from `context.ip`. A daily scheduled function removes expired rate counters without loading the catalog; the standalone server retains its minute-based timer. Search and comparison operate on this in-memory catalog; PostgreSQL stores durable game state. Multiple API instances must share the database, catalog and Daily secret. Mutation rate counters are shared through PostgreSQL.
+The API loads and validates the catalog at startup. Netlify initializes it lazily once per warm instance; concurrent first requests share the initialization promise and failed initialization is retried by a later request. The same Fetch handler serves Node and Functions, preserving interactive PostgreSQL transactions. Netlify client identity comes only from `context.ip`. A daily scheduled function removes expired rate counters and Telegram credentials without loading the catalog. The standalone server runs cleanup every minute. Search and comparison operate on this in-memory catalog; PostgreSQL stores durable game state. Multiple API instances must share the database, catalog and Daily secret. Mutation rate counters are shared through PostgreSQL.
 
 Movie-provider credentials remain server-side. Media lookups are optional, have bounded concurrency and timeouts, and do not prevent gameplay. See [data and media](DATA.md) for caching and attribution, and [deployment](DEPLOYMENT.md) for public hosting.
 

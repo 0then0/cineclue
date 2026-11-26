@@ -19,7 +19,7 @@ import { selectDaily } from "./daily.ts";
 
 export { dailyIndex } from "./daily.ts";
 
-import { pool } from "./db.ts";
+import { pool, transaction } from "./db.ts";
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -33,26 +33,12 @@ export const utcDate = (date = new Date()) => date.toISOString().slice(0, 10);
 export const nextMidnight = (date: string) =>
   new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString();
 const archivePageSize = 30;
-const sessionByVisitor =
-  "SELECT s.*,to_char(p.puzzle_date,'YYYY-MM-DD') date FROM game_session s LEFT JOIN daily_puzzle p ON p.id=COALESCE(s.puzzle_id,s.archive_puzzle_id) WHERE s.id=$1 AND s.visitor_id=$2";
+const sessionById =
+  "SELECT s.*,to_char(p.puzzle_date,'YYYY-MM-DD') date FROM game_session s LEFT JOIN daily_puzzle p ON p.id=COALESCE(s.puzzle_id,s.archive_puzzle_id) WHERE s.id=$1";
+const sessionByVisitor = `${sessionById} AND s.visitor_id=$2`;
 
 function requirePastDate(date: string) {
   if (date >= utcDate()) throw new ApiError(404, "archive_unavailable");
-}
-
-async function transaction<T>(run: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await run(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
 }
 
 async function lockPlayableSession(
@@ -60,9 +46,15 @@ async function lockPlayableSession(
   id: string,
   visitor: string,
   archiveDate?: string,
+  dailyVisitor?: string,
 ) {
   if (archiveDate !== undefined) requirePastDate(archiveDate);
-  const { rows } = await client.query(`${sessionByVisitor} FOR UPDATE OF s`, [id, visitor]);
+  const { rows } = dailyVisitor
+    ? await client.query(
+        `${sessionById} AND s.visitor_id=CASE WHEN s.mode='daily' THEN $3::uuid ELSE $2::uuid END FOR UPDATE OF s`,
+        [id, visitor, dailyVisitor],
+      )
+    : await client.query(`${sessionByVisitor} FOR UPDATE OF s`, [id, visitor]);
   const session = rows[0];
   if (
     !session ||
@@ -122,22 +114,22 @@ export class Games {
         )
       ).rows[0];
     }
-    await pool.query(
-      "INSERT INTO game_session(visitor_id,mode,puzzle_id,target_id,target_snapshot) VALUES($1,'daily',$2,$3,$4) ON CONFLICT(visitor_id,puzzle_id) DO NOTHING",
-      [
-        visitor,
-        puzzle.id,
-        puzzle.target_id,
-        JSON.stringify(puzzle.target_snapshot ?? this.catalog.byId.get(puzzle.target_id)),
-      ],
-    );
-    const game = (
-      await pool.query("SELECT id FROM game_session WHERE visitor_id=$1 AND puzzle_id=$2", [
-        visitor,
-        puzzle.id,
-      ])
-    ).rows[0];
-    return this.view(game.id, visitor);
+    return transaction(async (client) => {
+      await client.query(
+        "INSERT INTO game_session(visitor_id,mode,puzzle_id,target_id,target_snapshot) VALUES($1,'daily',$2,$3,$4) ON CONFLICT(visitor_id,puzzle_id) DO NOTHING",
+        [
+          visitor,
+          puzzle.id,
+          puzzle.target_id,
+          JSON.stringify(puzzle.target_snapshot ?? this.catalog.byId.get(puzzle.target_id)),
+        ],
+      );
+      const { rows } = await client.query(
+        "SELECT id FROM game_session WHERE visitor_id=$1 AND puzzle_id=$2 FOR SHARE",
+        [visitor, puzzle.id],
+      );
+      return this.view(rows[0].id, visitor, client);
+    });
   }
   async archiveDates(before?: string): Promise<ArchivePage> {
     const today = utcDate();
@@ -272,10 +264,16 @@ export class Games {
       ...(s.status !== "playing" ? { answer: target } : {}),
     };
   }
-  async hint(id: string, visitor: string, kind: HintKind, archiveDate?: string): Promise<GameView> {
+  async hint(
+    id: string,
+    visitor: string,
+    kind: HintKind,
+    archiveDate?: string,
+    dailyVisitor?: string,
+  ): Promise<GameView> {
     return transaction(async (client) => {
-      const s = await lockPlayableSession(client, id, visitor, archiveDate);
-      const view = await this.view(id, visitor, client);
+      const s = await lockPlayableSession(client, id, visitor, archiveDate, dailyVisitor);
+      const view = await this.view(id, s.visitor_id, client);
       if (view.hints.used.some((h) => h.kind === kind)) throw new ApiError(409, "hint_used");
       if (view.hints.remaining === 0) throw new ApiError(409, "hints_locked");
       const target = s.target_snapshot
@@ -288,7 +286,7 @@ export class Games {
         "INSERT INTO game_hint(game_id,ordinal,kind,content) VALUES($1,$2,$3,$4)",
         [id, view.hints.used.length + 1, kind, content],
       );
-      return this.view(id, visitor, client);
+      return this.view(id, s.visitor_id, client);
     });
   }
   async guess(id: string, visitor: string, movieId: string, archiveDate?: string) {

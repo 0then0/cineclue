@@ -7,7 +7,7 @@ it("coordinates first visitor requests and lets public reads run without updatin
   const cookieResponse = Promise.withResolvers<Response>();
   const firstRequest = Promise.withResolvers<void>();
   const fetch = vi.fn((url: string) => {
-    if (url === "/api/movies/search?q=") {
+    if (url === "/api/session") {
       firstRequest.resolve();
       return cookieResponse.promise;
     }
@@ -26,22 +26,23 @@ it("coordinates first visitor requests and lets public reads run without updatin
   const second = establishVisitor();
   await firstRequest.promise;
   await publicRead("/packs");
-  expect(fetch.mock.calls.map(([url]) => url)).toEqual(["/api/movies/search?q=", "/api/packs"]);
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual(["/api/session", "/api/packs"]);
   expect(fetch).toHaveBeenCalledWith(
     "/api/packs",
     expect.objectContaining({ credentials: "omit" }),
   );
   expect(fetch).toHaveBeenCalledWith(
-    "/api/movies/search?q=",
+    "/api/session",
     expect.objectContaining({ credentials: "same-origin" }),
   );
   // Each tab receives its own response after the browser cookie jar has been updated.
-  fetch.mockImplementation(() => Promise.resolve(Response.json({ movies: [] })));
-  cookieResponse.resolve(Response.json({ movies: [] }));
+  const session = { telegramBot: null, player: null, guestDaily: false };
+  fetch.mockImplementation(() => Promise.resolve(Response.json(session)));
+  cookieResponse.resolve(Response.json(session));
   await Promise.all([first, second]);
   expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-    "/api/movies/search?q=",
+    "/api/session",
     "/api/packs",
-    "/api/movies/search?q=",
+    "/api/session",
   ]);
 });

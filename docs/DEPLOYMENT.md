@@ -44,6 +44,8 @@ Under **Project configuration → Environment variables**, set these for the **P
 - `PUBLIC_ORIGIN`: the exact public HTTPS origin, for example `https://cineclue-0then0.netlify.app`, with no path or trailing slash.
 - `TMDB_API_TOKEN`: optional server-side TMDB Read Access Token for missing media. The committed metadata works without it.
 
+For Telegram, add the optional bot credentials with **Functions** scope after completing the [one-bot setup and test acceptance](TELEGRAM.md). The SPA serves `/telegram` and the function handles `/api/auth/telegram/callback`.
+
 Set `AWS_LAMBDA_JS_RUNTIME=nodejs24.x` in the Netlify UI with **Builds** scope to pin the function runtime. Netlify requires this override to be set outside `netlify.toml`. The build itself already selects Node 24. See [runtime configuration](https://docs.netlify.com/build/functions/configuration/).
 
 Do not use `VITE_` prefixes for secrets. Do not set `STATIC_ROOT`, `PORT` or `TRUSTED_PROXY_IP` for Functions. Secure cookies are always enabled by the function entry point; `context.ip` supplies the limiter identity and client forwarding headers are ignored. `NODE_ENV` is not used as a security switch by this entry point.
@@ -76,7 +78,7 @@ For later schema-only changes, run the database workflow with `migrate` before d
 
 Each warm function instance reuses its catalog, search index, media metadata and PostgreSQL pool. The pool is capped at two connections per Lambda instance, closes idle connections after ten seconds while the instance is running, and has a fifteen-second connection timeout. Total database connections still grow with the number of concurrent function instances. No session-level database settings or independent HTTP queries replace interactive transactions.
 
-`cleanup` deletes only expired rate-limit rows daily at **04:15 UTC**. Expired rows are not consulted by a later minute's limiter. This avoids a database query every minute while the site is idle, but the daily cleanup itself can wake Neon. The standalone Node server keeps its existing cleanup timer.
+`cleanup` deletes expired rate-limit rows, Telegram login attempts and Telegram sessions daily at **04:15 UTC**. Requests check expiry independently, so expired credentials are rejected before cleanup. The scheduled function can wake Neon. The standalone Node server runs cleanup every minute.
 
 The function bundle includes `data/media.json` and `data/daily-pool.json`. They remain server-side; raw catalog snapshots are not copied into the public Vite output. No runtime writes to the deployed filesystem are required.
 
@@ -102,6 +104,7 @@ Supply deployment-specific values:
 - `NODE_ENV=production`: enables Secure visitor cookies and requires an HTTPS public origin.
 - `TRUSTED_PROXY_IP`: optional exact socket address of a trusted proxy; see below.
 - `TMDB_API_TOKEN`: optional server-side API Read Access Token for images or imports.
+- Telegram sign-in uses the optional server-side variables in the [BotFather setup](TELEGRAM.md).
 
 `PORT` defaults to 3001. `STATIC_ROOT` points to the built frontend and is configured by the image. The application logs to stdout/stderr; `GET /api/health` checks the database and reports catalog size.
 
