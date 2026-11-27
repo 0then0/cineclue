@@ -89,7 +89,15 @@ const claims = z.object({
   iss: z.literal(issuer),
   aud: z.string(),
   sub: z.string().min(1),
-  id: telegramId,
+  // Telegram OIDC also serializes the profile ID as a decimal string.
+  id: z.union([
+    telegramId,
+    z
+      .string()
+      .regex(/^[1-9][0-9]{0,15}$/)
+      .transform(Number)
+      .pipe(telegramId),
+  ]),
   nonce: z.string().optional(),
   iat: z.number().int().positive(),
   exp: z.number().int().positive(),

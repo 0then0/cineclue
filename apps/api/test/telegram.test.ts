@@ -36,7 +36,7 @@ it("uses the signed OIDC profile id and validates signature, client, issuer, non
   const valid = { iat: now - 10, exp: now + 3600 };
   const verify = (token: string) =>
     verifyIdToken(token, [telegramJwk], telegram.clientId, "fixture-nonce", now);
-  const token = idToken(valid);
+  const token = idToken({ ...valid, id: String(testUserId) });
   expect(verify(token)).toBe(testUserId);
   expect(() => verify(idToken({ ...valid, nonce: undefined }))).toThrow(
     expect.objectContaining({ reason: "id_token_nonce" }),
@@ -47,16 +47,20 @@ it("uses the signed OIDC profile id and validates signature, client, issuer, non
   ).toThrow("telegram_invalid");
   for (const claims of [
     { aud: "different-client" },
+    { aud: [telegram.clientId, "different-client"] },
     { iss: "https://example.com" },
     { nonce: "different-attempt" },
     { nonce: undefined },
     { exp: now },
     { iat: now + 31 },
     { id: undefined },
-    { id: "4294967310" },
+    { nbf: now + 31 },
+    { iat: now + 1, exp: now + 1 },
     { sub: undefined },
   ]) {
-    expect(() => verify(idToken({ ...valid, ...claims }))).toThrow("telegram_invalid");
+    expect(() => verify(idToken({ ...valid, id: String(testUserId), ...claims }))).toThrow(
+      "telegram_invalid",
+    );
   }
   expect(() => verify(idToken(valid, { alg: "none", kid: "test-key" }))).toThrow(
     "telegram_invalid",
@@ -64,6 +68,54 @@ it("uses the signed OIDC profile id and validates signature, client, issuer, non
   expect(() => verify(idToken(valid, { alg: "RS256", kid: "different-key" }))).toThrow(
     "telegram_invalid",
   );
+});
+
+it("maps numeric and decimal-string OIDC IDs to the same value throughout the supported range", () => {
+  const now = 1_800_000_000;
+  for (const id of [1, testUserId, 2 ** 52 - 1]) {
+    for (const value of [id, String(id)]) {
+      const token = idToken({ id: value, iat: now + 30, nbf: now + 30, exp: now + 60 });
+      expect(verifyIdToken(token, [telegramJwk], telegram.clientId, "fixture-nonce", now)).toBe(id);
+    }
+  }
+});
+
+it("rejects noncanonical and out-of-range OIDC IDs even in a validly signed token", () => {
+  const now = 1_800_000_000;
+  for (const id of [
+    0,
+    -1,
+    1.5,
+    2 ** 52,
+    "",
+    "0",
+    "01",
+    "-1",
+    "+1",
+    " 1",
+    "1 ",
+    "1\n",
+    "1.0",
+    "1e3",
+    "0x10",
+    "１２",
+    String(2 ** 52),
+    "99999999999999999",
+    true,
+    null,
+    [1],
+    { id: 1 },
+  ]) {
+    const token = idToken({ id, iat: now - 1, exp: now + 60 });
+    expect(() =>
+      verifyIdToken(token, [telegramJwk], telegram.clientId, "fixture-nonce", now),
+    ).toThrow(
+      expect.objectContaining({
+        reason: "id_token_claims",
+        details: { claimIssues: [expect.objectContaining({ field: "id" })] },
+      }),
+    );
+  }
 });
 
 it("classifies token exchange failures without exposing provider-supplied messages", async () => {

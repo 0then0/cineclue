@@ -962,7 +962,7 @@ describe.skipIf(!enabled)("API + disposable PostgreSQL", () => {
           .update(body.get("code_verifier") ?? "")
           .digest("base64url"),
       ).toBe(auth.searchParams.get("code_challenge"));
-      return Response.json({ id_token: idToken({ nonce }) });
+      return Response.json({ id_token: idToken({ nonce, id: String(testUserId) }) });
     });
     vi.stubGlobal("fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       if (input === "https://oauth.telegram.org/token") return tokenCalls(init);
