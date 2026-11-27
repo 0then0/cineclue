@@ -79,18 +79,59 @@ it("classifies token exchange failures without exposing provider-supplied messag
     await expect(exchange("code", "verifier", "nonce")).rejects.toMatchObject({
       message: "telegram_invalid",
       reason: "token_request",
-      upstreamStatus: 401,
-      upstreamCode: "invalid_client",
+      details: { upstreamStatus: 401, upstreamCode: "invalid_client" },
     });
     request.mockResolvedValueOnce(Response.json({ error: "private detail" }, { status: 400 }));
     await expect(exchange("code", "verifier", "nonce")).rejects.toMatchObject({
       reason: "token_request",
-      upstreamStatus: 400,
-      upstreamCode: undefined,
+      details: { upstreamStatus: 400, upstreamCode: undefined },
     });
   } finally {
     request.mockRestore();
   }
+});
+
+it("reports missing and mistyped signed claims through the OIDC exchange", async () => {
+  const token = idToken({ id: undefined, aud: ["private audience"] });
+  const request = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json({ id_token: token }))
+    .mockResolvedValueOnce(Response.json({ keys: [telegramJwk] }));
+  try {
+    await expect(telegramOidc(telegram)("code", "verifier", "fixture-nonce")).rejects.toThrow(
+      expect.objectContaining({
+        message: "telegram_invalid",
+        reason: "id_token_claims",
+        details: {
+          claimIssues: [
+            { field: "aud", code: "invalid_type", receivedType: "array" },
+            { field: "id", code: "missing" },
+          ],
+        },
+      }),
+    );
+  } finally {
+    request.mockRestore();
+  }
+});
+
+it("distinguishes audience mismatch from an expired token", () => {
+  const now = 1_800_000_000;
+  const verify = (token: string) =>
+    verifyIdToken(token, [telegramJwk], telegram.clientId, "fixture-nonce", now);
+  const valid = { iat: now - 10, exp: now + 60 };
+  expect(() => verify(idToken({ ...valid, aud: "another client" }))).toThrow(
+    expect.objectContaining({
+      reason: "id_token_claims",
+      details: { claimIssues: [{ field: "aud", code: "mismatch" }] },
+    }),
+  );
+  expect(() => verify(idToken({ ...valid, exp: now }))).toThrow(
+    expect.objectContaining({
+      reason: "id_token_claims",
+      details: { claimIssues: [{ field: "exp", code: "expired" }] },
+    }),
+  );
 });
 
 it("requires HTTPS and credentials from the same bot when Telegram is enabled", () => {

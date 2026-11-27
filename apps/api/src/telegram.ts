@@ -123,14 +123,51 @@ const tokenErrorCode = z.enum([
   "invalid_scope",
 ]);
 
+const claimFields = claims.keyof();
+type ClaimIssue = {
+  field: z.infer<typeof claimFields> | "payload";
+  code: string;
+  receivedType?: string;
+};
+
 export class TelegramOidcFailure extends ApiError {
   constructor(
     readonly reason: OidcFailureReason,
-    readonly upstreamStatus?: number,
-    readonly upstreamCode?: z.infer<typeof tokenErrorCode>,
+    readonly details: {
+      upstreamStatus?: number;
+      upstreamCode?: z.infer<typeof tokenErrorCode>;
+      claimIssues?: ClaimIssue[];
+    } = {},
   ) {
     super(401, "telegram_invalid");
   }
+}
+
+function invalidClaims(...claimIssues: ClaimIssue[]) {
+  return new TelegramOidcFailure("id_token_claims", { claimIssues });
+}
+
+function parseIdTokenClaims(encoded: string) {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  } catch {
+    throw invalidClaims({ field: "payload", code: "invalid_json" });
+  }
+  const parsed = claims.safeParse(payload);
+  if (parsed.success) return parsed.data;
+  throw invalidClaims(
+    ...parsed.error.issues.map(({ path, code }): ClaimIssue => {
+      const field = claimFields.safeParse(path[0]);
+      if (path.length !== 1 || !field.success || payload === null || typeof payload !== "object") {
+        return { field: "payload", code };
+      }
+      if (!Object.hasOwn(payload, field.data)) return { field: field.data, code: "missing" };
+      const value: unknown = Reflect.get(payload, field.data);
+      const receivedType = Array.isArray(value) ? "array" : value === null ? "null" : typeof value;
+      return { field: field.data, code, receivedType };
+    }),
+  );
 }
 
 export function verifyIdToken(
@@ -167,15 +204,13 @@ export function verifyIdToken(
       throw new TelegramOidcFailure(reason);
     }
     reason = "id_token_claims";
-    const data = claims.parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
-    if (
-      data.aud !== clientId ||
-      data.exp <= now ||
-      data.iat > now + clockSkew ||
-      data.exp <= data.iat ||
-      (data.nbf !== undefined && data.nbf > now + clockSkew)
-    ) {
-      throw new TelegramOidcFailure(reason);
+    const data = parseIdTokenClaims(payload);
+    if (data.aud !== clientId) throw invalidClaims({ field: "aud", code: "mismatch" });
+    if (data.exp <= now) throw invalidClaims({ field: "exp", code: "expired" });
+    if (data.iat > now + clockSkew) throw invalidClaims({ field: "iat", code: "in_future" });
+    if (data.exp <= data.iat) throw invalidClaims({ field: "exp", code: "not_after_iat" });
+    if (data.nbf !== undefined && data.nbf > now + clockSkew) {
+      throw invalidClaims({ field: "nbf", code: "in_future" });
     }
     if (data.nonce === undefined || data.nonce !== nonce) {
       throw new TelegramOidcFailure("id_token_nonce");
@@ -217,7 +252,9 @@ export function telegramOidc(config: TelegramConfig) {
       signal: AbortSignal.timeout(5000),
     })
       .then(async (response) => {
-        if (!response.ok) throw new TelegramOidcFailure("jwks", response.status);
+        if (!response.ok) {
+          throw new TelegramOidcFailure("jwks", { upstreamStatus: response.status });
+        }
         const { keys } = z.object({ keys: z.array(z.unknown()) }).parse(await response.json());
         cached = { keys, expires: Date.now() + 3_600_000 };
         return keys;
@@ -253,7 +290,10 @@ export function telegramOidc(config: TelegramConfig) {
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         const error = z.object({ error: tokenErrorCode }).safeParse(body);
-        throw new TelegramOidcFailure(reason, response.status, error.data?.error);
+        throw new TelegramOidcFailure(reason, {
+          upstreamStatus: response.status,
+          upstreamCode: error.data?.error,
+        });
       }
       reason = "token_response";
       const { id_token } = z.object({ id_token: z.string() }).parse(await response.json());

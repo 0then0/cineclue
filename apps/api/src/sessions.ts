@@ -166,8 +166,9 @@ export class TelegramSessions {
         JSON.stringify({
           event: "telegram_oidc_failed",
           reason,
-          upstreamStatus: failure?.upstreamStatus,
-          upstreamCode: failure?.upstreamCode,
+          upstreamStatus: failure?.details.upstreamStatus,
+          upstreamCode: failure?.details.upstreamCode,
+          claimIssues: failure?.details.claimIssues,
         }),
       );
       return redirect(path, "failed");
